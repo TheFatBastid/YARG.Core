@@ -1,5 +1,7 @@
 ﻿using System;
 using System.Runtime.CompilerServices;
+using YARG.Core.Chart;
+using YARG.Core.Song;
 
 namespace YARG.Core
 {
@@ -20,11 +22,11 @@ namespace YARG.Core
         // 5-9: Drums
         FourLaneDrums = 5,
         FiveLaneDrums = 6,
-        // EliteDrums = 7,
+        EliteDrums = 7,
 
         // 10-14: Pro instruments
         ProGuitar = 10,
-        ProKeys = 11,
+        ProKeys = 11, // Includes Pro and Five-Lane
 
         // 15-19: Vocals
         Vocals = 15,
@@ -109,9 +111,85 @@ namespace YARG.Core
         All = Beginner | Easy | Medium | Hard | Expert | ExpertPlus,
     }
 
+    /// <summary>
+    /// Available drum star power activation types.
+    /// </summary>
+    public enum StarPowerActivationType : byte
+    {
+        // Ordered chronologically -- DO NOT REORDER!!
+        Freestyle     = 0, // Old Rock Band style    // TODO: Implement
+        RightmostLane = 1, // Modern Rock Band style // TODO: Implement
+        RightmostNote = 2, // Clone Hero style
+        AllNotes      = 3, // Old YARG style
+    }
+
+    /// <summary>
+    /// Options for displaying a dedicated open note lane in non-Pro Keys.
+    /// </summary>
+    public enum OpenLaneDisplayType : byte
+    {
+        // Serialized; do not reorder
+        Never                   = 0,
+        Always                  = 1,
+        IfChartContainsOpens    = 2
+    }
+
+    /// <summary>
+    /// Potential entries in a drums highway ordering
+    /// </summary>
+    public enum DrumsHighwayItem : byte
+    {
+        // Serialized; do not reorder
+        Kick                    = 0,
+        Kick1x                  = 1,
+        Kick2x                  = 2,
+        Kick2xConditional       = 3,
+
+        Red             = 4,
+        Yellow          = 5,
+        Blue            = 6,
+        Green           = 7,
+
+        YellowCymbal    = 8,
+        BlueCymbal      = 9,
+        GreenCymbal     = 10,
+
+        YellowDrum      = 11,
+        BlueDrum        = 12,
+        GreenDrum       = 13,
+
+        Orange          = 14
+    }
+
     public static class ChartEnumExtensions
     {
-        public static GameMode ToGameMode(this Instrument instrument)
+        /// <summary>
+        /// Maps a 6-fret instrument to its 5-fret equivalent for chart fallback.
+        /// When a 6-fret chart is not available, the corresponding 5-fret chart
+        /// can be used instead since fret values map 1:1 (Green=1→Black1=1, etc.).
+        /// </summary>
+        public static Instrument ToFiveFretEquivalent(this Instrument instrument)
+        {
+            return instrument switch
+            {
+                Instrument.SixFretGuitar    => Instrument.FiveFretGuitar,
+                Instrument.SixFretBass      => Instrument.FiveFretBass,
+                Instrument.SixFretRhythm    => Instrument.FiveFretRhythm,
+                Instrument.SixFretCoopGuitar => Instrument.FiveFretCoopGuitar,
+                _ => instrument
+            };
+        }
+
+        /// <summary>
+        /// Checks if an instrument is a 6-fret guitar variant.
+        /// </summary>
+        public static bool IsSixFret(this Instrument instrument)
+        {
+            return instrument is Instrument.SixFretGuitar or Instrument.SixFretBass
+                or Instrument.SixFretRhythm or Instrument.SixFretCoopGuitar;
+        }
+
+        public static GameMode ToNativeGameMode(this Instrument instrument)
         {
             return instrument switch
             {
@@ -131,7 +209,7 @@ namespace YARG.Core
 
                 Instrument.FiveLaneDrums => GameMode.FiveLaneDrums,
 
-                // Instrument.EliteDrums => GameMode.EliteDrums,
+                Instrument.EliteDrums => GameMode.EliteDrums,
 
                 Instrument.ProGuitar_17Fret or
                 Instrument.ProGuitar_22Fret or
@@ -162,38 +240,52 @@ namespace YARG.Core
                     Instrument.FiveFretCoopGuitar,
                     Instrument.Keys,
                 },
-                GameMode.SixFretGuitar  => new[]
+                GameMode.SixFretGuitar => new[]
                 {
                     Instrument.SixFretGuitar,
                     Instrument.SixFretBass,
                     Instrument.SixFretRhythm,
                     Instrument.SixFretCoopGuitar,
+                    // 5F is playable on 6F through the magical power of conversions
+                    Instrument.FiveFretGuitar,
+                    Instrument.FiveFretBass,
+                    Instrument.FiveFretRhythm,
+                    Instrument.FiveFretCoopGuitar,
+                    Instrument.Keys,
                 },
-                GameMode.FourLaneDrums  => new[]
+                GameMode.FourLaneDrums => new[]
                 {
                     Instrument.FourLaneDrums,
                     Instrument.ProDrums,
                 },
-                GameMode.FiveLaneDrums  => new[]
+                GameMode.FiveLaneDrums => new[]
                 {
                     Instrument.FiveLaneDrums
                 },
-                //GameMode.EliteDrums     => new[]
-                //{
-                //     Instrument.EliteDrums,
-                //},
-                GameMode.ProGuitar      => new[]
+                GameMode.EliteDrums => new[]
+                {
+                    Instrument.FourLaneDrums,
+                    Instrument.ProDrums,
+                    Instrument.EliteDrums,
+                    Instrument.FiveLaneDrums,
+                },
+                GameMode.ProGuitar => new[]
                 {
                     Instrument.ProGuitar_17Fret,
                     Instrument.ProGuitar_22Fret,
                     Instrument.ProBass_17Fret,
                     Instrument.ProBass_22Fret,
                 },
-                GameMode.ProKeys        => new[]
+                GameMode.ProKeys => new[]
                 {
-                    Instrument.ProKeys
+                    Instrument.ProKeys,
+                    Instrument.Keys,
+                    Instrument.FiveFretGuitar,
+                    Instrument.FiveFretBass,
+                    Instrument.FiveFretRhythm,
+                    Instrument.FiveFretCoopGuitar
                 },
-                GameMode.Vocals         => new[]
+                GameMode.Vocals => new[]
                 {
                     Instrument.Vocals,
                     Instrument.Harmony
@@ -203,7 +295,39 @@ namespace YARG.Core
                 //     Instrument.DjSingle,
                 //     Instrument.DjDouble,
                 // },
-                _  => throw new NotImplementedException($"Unhandled game mode {gameMode}!")
+                _ => throw new NotImplementedException($"Unhandled game mode {gameMode}!")
+            };
+        }
+
+        public static Instrument[] PossibleInstrumentsForSong(this GameMode gameMode, SongEntry entry)
+        {
+            return gameMode switch
+            {
+                GameMode.EliteDrums     => entry.HasInstrument(Instrument.FiveLaneDrums) ?
+                    new[]
+                    {
+                        Instrument.FiveLaneDrums,
+                        //Instrument.EliteDrums,
+                    } :
+                    new[] {
+                        Instrument.FourLaneDrums,
+                        Instrument.ProDrums,
+                        //Instrument.EliteDrums,
+                    },
+                GameMode.SixFretGuitar => new[]
+                {
+                    Instrument.SixFretGuitar,
+                    Instrument.SixFretBass,
+                    Instrument.SixFretRhythm,
+                    Instrument.SixFretCoopGuitar,
+                    // Allow selecting 5-fret tracks in 6-fret mode (pro keys pattern)
+                    Instrument.FiveFretGuitar,
+                    Instrument.FiveFretBass,
+                    Instrument.FiveFretRhythm,
+                    Instrument.FiveFretCoopGuitar,
+                    Instrument.Keys
+                },
+                _  => PossibleInstruments(gameMode)
             };
         }
 

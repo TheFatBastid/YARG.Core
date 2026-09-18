@@ -158,7 +158,7 @@ namespace YARG.Core.Chart
             where TEvent : ChartEvent
         {
             if (events.Count < 1)
-                return 0;
+                return double.MaxValue;
 
             // Chart events are sorted
             var chartEvent = events[0];
@@ -174,6 +174,26 @@ namespace YARG.Core.Chart
             // Chart events are sorted
             var chartEvent = events[^1];
             return chartEvent.TimeEnd;
+        }
+
+        public static double GetNoteEndTime<TNote>(this List<TNote> notes)
+            where TNote : Note<TNote>
+        {
+            if (notes.Count < 1)
+                return 0;
+
+            double timeEnd = 0;
+
+            //child notes or earlier notes may have later end times
+            foreach (var chord in notes)
+            {
+                timeEnd = Math.Max(timeEnd, chord.TimeEnd);
+                foreach (var child in chord.ChildNotes)
+                {
+                    timeEnd = Math.Max(timeEnd, child.TimeEnd);
+                }
+            }
+            return timeEnd;
         }
 
         public static uint GetFirstTick<TEvent>(this List<TEvent> events)
@@ -372,11 +392,50 @@ namespace YARG.Core.Chart
             return events.FindRange(startTick, endTick, EventComparer<TEvent>.CompareTick, endInclusive, out range);
         }
 
+        /// <summary>
+        /// Inserts the given event into a sorted position within the list.
+        /// </summary>
+        /// <remarks>
+        /// The inserted event will be placed after all existing events that compare equal.
+        /// </remarks>
+        public static void OrderedInsert<TEvent>(this List<TEvent> events, TEvent item)
+            where TEvent : ChartEvent
+        {
+            events.OrderedInsert(item, EventComparer<TEvent>.CompareEvent);
+        }
+
+        /// <summary>
+        /// Inserts the given event into a sorted position within the list,
+        /// checking linearly starting from the back.
+        /// </summary>
+        /// <remarks>
+        /// The inserted event will be placed after all existing events that compare equal.
+        /// </remarks>
+        public static void OrderedInsertFromBack<TEvent>(this List<TEvent> events, TEvent item)
+            where TEvent : ChartEvent
+        {
+            events.OrderedInsertFromBack(item, EventComparer<TEvent>.CompareEvent);
+        }
+
+        /// <summary>
+        /// Inserts the given event into a sorted position within the list,
+        /// checking linearly starting from the front.
+        /// </summary>
+        /// <remarks>
+        /// The inserted event will be placed after all existing events that compare equal.
+        /// </remarks>
+        public static void OrderedInsertFromFront<TEvent>(this List<TEvent> events, TEvent item)
+            where TEvent : ChartEvent
+        {
+            events.OrderedInsertFromFront(item, EventComparer<TEvent>.CompareEvent);
+        }
+
         private static class EventComparer<TEvent>
             where TEvent : ChartEvent
         {
             public static readonly SearchComparison<TEvent, double> CompareTime = (ev, time) => ev.Time.CompareTo(time);
             public static readonly SearchComparison<TEvent, uint> CompareTick = (ev, tick) => ev.Tick.CompareTo(tick);
+            public static readonly SearchComparison<TEvent, TEvent> CompareEvent = (l, r) => l.Tick.CompareTo(r.Tick);
         }
     }
 }

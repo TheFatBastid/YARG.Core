@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 
 namespace YARG.Core.Chart
 {
@@ -19,15 +19,33 @@ namespace YARG.Core.Chart
 
         // Other events
         Solo, // Also for visuals
-        BigRockEnding,
+        BigRockEnding, // The part where we show BRE graphics and can't hit or miss notes
+        Coda, // The entirety of the coda section, including the final notes; should contain a BigRockEnding phrase
 
-        // Pro-keys range shifts
+
+        // Pro Keys-exclusive phrases
         ProKeys_RangeShift0,
         ProKeys_RangeShift1,
         ProKeys_RangeShift2,
         ProKeys_RangeShift3,
         ProKeys_RangeShift4,
         ProKeys_RangeShift5,
+
+        // Elite Drums-exclusive phrases
+        EliteDrums_RightCrashLane,
+        EliteDrums_RideLane,
+        EliteDrums_Tom3Lane,
+        EliteDrums_Tom2Lane,
+        EliteDrums_Tom1Lane,
+        EliteDrums_LeftCrashLane,
+        EliteDrums_HiHatLane,
+        EliteDrums_SnareLane,
+        EliteDrums_KickLane,
+        EliteDrums_HatPedalLane,
+        EliteDrums_DiscoFlip,
+
+        // (Non-Elite) Drums-exclusive phrases
+        KickLane,
     }
 
     /// <summary>

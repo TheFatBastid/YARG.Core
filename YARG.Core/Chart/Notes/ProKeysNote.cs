@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 
 namespace YARG.Core.Chart
 {
@@ -7,13 +7,18 @@ namespace YARG.Core.Chart
         private ProKeysNoteFlags _proKeysFlags;
         public ProKeysNoteFlags ProKeysFlags;
 
+        // Keys 1-25 map to bits 0-24, respectively. Bits 25-31 are unused
         public int Key          { get; }
         public int DisjointMask { get; }
         public int NoteMask     { get; private set; }
 
         public bool IsGlissando => (ProKeysFlags & ProKeysNoteFlags.Glissando) != 0;
+        public bool IsGlissandoStart => (ProKeysFlags & ProKeysNoteFlags.GlissandoStart) != 0;
+        public bool IsGlissandoEnd => (ProKeysFlags & ProKeysNoteFlags.GlissandoEnd) != 0;
 
         public bool IsSustain => TickLength > 0;
+
+        public override int LaneNote => Key;
 
         public ProKeysNote(int key, ProKeysNoteFlags proKeysFlags, NoteFlags flags,
             double time, double timeLength, uint tick, uint tickLength)
@@ -74,5 +79,7 @@ namespace YARG.Core.Chart
         None = 0,
 
         Glissando = 1 << 0,
+        GlissandoStart = 1 << 1,
+        GlissandoEnd = 1 << 2,
     }
 }

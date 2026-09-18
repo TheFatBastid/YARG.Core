@@ -94,16 +94,20 @@ namespace YARG.Core.Song
                         validations |= diffMask;
                     }
                 }
-                else if (YELLOW_FLAG <= note.Value && note.Value <= GREEN_FLAG && drumsType.Has(DrumsType.ProDrums))
+                else if (YELLOW_FLAG <= note.Value && note.Value <= GREEN_FLAG && drumsType != DrumsType.FiveLane)
                 {
                     drumsType = DrumsType.ProDrums;
                 }
 
-                if (validations == MidiPreparser_Constants.ALL_DIFFICULTIES_PLUS && (drumsType == DrumsType.FourLane || drumsType == DrumsType.ProDrums || drumsType == DrumsType.FiveLane))
+                if (validations == MidiPreparser_Constants.ALL_DIFFICULTIES_PLUS && drumsType is DrumsType.ProDrums or DrumsType.FiveLane)
                 {
                     break;
                 }
             }
+
+            // Add beginner to the mask if easy is present (mask easy, shift right, or result with validations)
+            validations |= (DifficultyMask)((int)(validations & DifficultyMask.Easy) >> 1);
+
             return validations;
         }
     }

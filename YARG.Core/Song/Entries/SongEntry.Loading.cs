@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.IO;
 using YARG.Core.Audio;
 using YARG.Core.Chart;
@@ -13,7 +13,9 @@ namespace YARG.Core.Song
         public  BackgroundType Type   { get; }
         public  Stream?        Stream { get; }
 
-        public YARGImage Image => _image;
+        public YARGImage? Image => _image;
+
+        public string? VenueHint { get; }
 
         public BackgroundResult(BackgroundType type, Stream stream)
         {
@@ -29,6 +31,13 @@ namespace YARG.Core.Song
             Stream = null;
         }
 
+        public BackgroundResult(string venueHint)
+        {
+            VenueHint = venueHint;
+            Type = BackgroundType.Yarground;
+            Stream = null;
+        }
+
         public void Dispose()
         {
             _image?.Dispose();
@@ -39,10 +48,11 @@ namespace YARG.Core.Song
     public abstract partial class SongEntry
     {
         public abstract SongChart? LoadChart();
-        public abstract StemMixer? LoadAudio(float speed, double volume, params SongStem[] ignoreStems);
-        public abstract StemMixer? LoadPreviewAudio(float speed);
+        public abstract StemMixer? LoadAudio(float speed, double volume, bool enableCensoring, params SongStem[] ignoreStems);
+        public abstract StemMixer? LoadPreviewAudio(float speed, bool enableCensoring);
         public abstract YARGImage? LoadAlbumData();
-        public abstract BackgroundResult? LoadBackground();
+        public abstract BackgroundResult? LoadBackground(bool enableCensoring, bool excludeYarground = false);
         public abstract FixedArray<byte>? LoadMiloData();
+        public abstract FixedArray<byte>? LoadVocData();
     }
 }

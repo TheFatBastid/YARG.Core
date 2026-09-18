@@ -18,6 +18,7 @@ namespace YARG.Core.Game
         NoDynamics    = 1 << 8,
         NoVocalPercussion = 1 << 9,
         RangeCompress = 1 << 10,
+        OpensToGreens = 1 << 11
     }
 
     public static class ModifierConflicts
@@ -36,7 +37,29 @@ namespace YARG.Core.Game
             Modifier.TapsToHopos,
         };
 
-        public static Modifier PossibleModifiers(this GameMode gameMode)
+        // Returns two modifier sets. The first set ("possible" modifiers) represents modifiers that should be
+        // selectable for this combination of GameMode and Instrument. The second ("excusable" modifiers) are
+        // those that should not be selectable for this combination, but should be selectable for the same GameMode
+        // with a different Instrument. Excusable modifiers are not listed in the modifier menu, but are also not
+        // cleared behind the scenes, unlike the "impossible" modifiers that are not captured in either returned set.
+        public static (Modifier possible, Modifier excusable) PossibleModifiers(this GameMode gameMode, Instrument instrument)
+        {
+            var all = gameMode.AllModifiers();
+
+            var excusable = instrument switch {
+                Instrument.ProKeys =>
+                    Modifier.RangeCompress |
+                    Modifier.OpensToGreens,
+
+                _ => Modifier.None
+            };
+
+            var possible = all & ~excusable;
+
+            return (possible, excusable);
+        }
+
+        private static Modifier AllModifiers(this GameMode gameMode)
         {
             return gameMode switch
             {
@@ -46,10 +69,19 @@ namespace YARG.Core.Game
                     Modifier.AllTaps       |
                     Modifier.HoposToTaps   |
                     Modifier.TapsToHopos   |
-                    Modifier.RangeCompress,
+                    Modifier.RangeCompress |
+                    Modifier.OpensToGreens,
+
+                GameMode.SixFretGuitar =>
+                    Modifier.AllStrums     |
+                    Modifier.AllHopos      |
+                    Modifier.AllTaps       |
+                    Modifier.HoposToTaps   |
+                    Modifier.TapsToHopos,
 
                 GameMode.FourLaneDrums or
-                GameMode.FiveLaneDrums =>
+                GameMode.FiveLaneDrums or
+                GameMode.EliteDrums =>
                     Modifier.NoKicks    |
                     Modifier.NoDynamics,
 
@@ -57,8 +89,10 @@ namespace YARG.Core.Game
                     Modifier.UnpitchedOnly |
                     Modifier.NoVocalPercussion,
 
-                GameMode.SixFretGuitar or
-            //  GameMode.EliteDrums    or
+                GameMode.ProKeys =>
+                    Modifier.RangeCompress |
+                    Modifier.OpensToGreens,
+
                 GameMode.ProGuitar     or
             //  GameMode.Dj            or
                 GameMode.ProKeys       => Modifier.None,

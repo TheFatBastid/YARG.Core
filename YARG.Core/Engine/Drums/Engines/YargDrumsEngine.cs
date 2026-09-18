@@ -8,8 +8,8 @@ namespace YARG.Core.Engine.Drums.Engines
     public class YargDrumsEngine : DrumsEngine
     {
         public YargDrumsEngine(InstrumentDifficulty<DrumNote> chart, SyncTrack syncTrack,
-            DrumsEngineParameters engineParameters, bool isBot)
-            : base(chart, syncTrack, engineParameters, isBot)
+            DrumsEngineParameters engineParameters, bool isBot, bool isMidiDrumsInput)
+            : base(chart, syncTrack, engineParameters, isBot, isMidiDrumsInput)
         {
         }
 
@@ -20,10 +20,59 @@ namespace YARG.Core.Engine.Drums.Engines
             // Every button release has its gameInput.Axis set to 0, so this works safely.
             if (gameInput.Axis > 0)
             {
-                Action = gameInput.GetAction<DrumsAction>();
-                PadHit = ConvertInputToPad(EngineParameters.Mode, gameInput.GetAction<DrumsAction>());
+                if (IsMidiDrumsInput)
+                {
+                    var eliteDrumsAction = gameInput.GetAction<EliteDrumsAction>();
+                    Action = ConvertMidiDrumsInput(eliteDrumsAction, Chart.Instrument);
+                    PadHit = Action is null ? null : ConvertInputToPad(EngineParameters.Mode, Action.Value);
+                }
+                else
+                {
+                    Action = gameInput.GetAction<DrumsAction>();
+                    PadHit = ConvertInputToPad(EngineParameters.Mode, gameInput.GetAction<DrumsAction>());
+                }
                 HitVelocity = gameInput.Axis;
+
+                if (PadHit != null)
+                {
+                    SubmitLaneNote((int) PadHit);
+                }
             }
+        }
+
+        private DrumsAction? ConvertMidiDrumsInput(EliteDrumsAction action, Instrument target)
+        {
+            if (target is Instrument.FourLaneDrums or Instrument.ProDrums)
+            {
+                return action switch
+                {
+                    EliteDrumsAction.Kick => DrumsAction.Kick,
+                    EliteDrumsAction.FourLaneRedDrum => DrumsAction.Drum1,
+                    EliteDrumsAction.FourLaneYellowDrum => DrumsAction.Drum2,
+                    EliteDrumsAction.FourLaneBlueDrum => DrumsAction.Drum3,
+                    EliteDrumsAction.FourLaneGreenDrum => DrumsAction.Drum4,
+                    EliteDrumsAction.FourLaneYellowCymbal => DrumsAction.Cymbal1,
+                    EliteDrumsAction.FourLaneBlueCymbal => DrumsAction.Cymbal2,
+                    EliteDrumsAction.FourLaneGreenCymbal => DrumsAction.Cymbal3,
+                    _ => null
+                };
+            }
+
+            if (target is Instrument.FiveLaneDrums)
+            {
+                return action switch
+                {
+                    EliteDrumsAction.Kick => DrumsAction.Kick,
+                    EliteDrumsAction.FiveLaneRedDrum => DrumsAction.Drum1,
+                    EliteDrumsAction.FiveLaneYellowCymbal => DrumsAction.Cymbal1,
+                    EliteDrumsAction.FiveLaneBlueDrum => DrumsAction.Drum3,
+                    EliteDrumsAction.FiveLaneOrangeCymbal => DrumsAction.Cymbal2,
+                    EliteDrumsAction.FiveLaneGreenDrum => DrumsAction.Drum4,
+                    _ => null
+                };
+            }
+
+            return null;
         }
 
         protected override void UpdateHitLogic(double time)
@@ -38,7 +87,7 @@ namespace YARG.Core.Engine.Drums.Engines
             }
             else if (Action is { } padAction)
             {
-                OnPadHit?.Invoke(padAction, false, HitVelocity.GetValueOrDefault(0));
+                OnPadHit?.Invoke(padAction, false, false, false, DrumNoteType.Neutral, HitVelocity.GetValueOrDefault(0));
                 ResetPadState();
             }
         }
@@ -58,12 +107,26 @@ namespace YARG.Core.Engine.Drums.Engines
                     // Miss out the back end
                     if (!IsNoteInWindow(note, out bool missed))
                     {
+                        // You can't skip ahead if the note is not in the hit window to begin with
+                        stopSkipping = true;
+
                         if (isFirstNoteInWindow && missed)
                         {
                             // If one of the notes in the chord was missed out the back end,
                             // that means all of them would miss.
                             foreach (var missedNote in parentNote.AllNotes)
                             {
+                                // Intercept missed note while lane phrase is active and missed note is in forgiveness window
+                                if (AutohitNoteFromLane(missedNote))
+                                {
+                                    continue;
+                                }
+
+                                if (AutohitNoteFromKickLane(missedNote))
+                                {
+                                    continue;
+                                }
+
                                 // Allow drummers to skip SP activation notes without being penalized.
                                 if (missedNote.IsStarPowerActivator && CanStarPowerActivate)
                                 {
@@ -74,8 +137,6 @@ namespace YARG.Core.Engine.Drums.Engines
                             }
                         }
 
-                        // You can't skip ahead if the note is not in the hit window to begin with
-                        stopSkipping = true;
                         break;
                     }
 
@@ -87,7 +148,7 @@ namespace YARG.Core.Engine.Drums.Engines
                         // TODO - Deadly Dynamics modifier check on awardVelocityBonus
 
                         HitNote(note);
-                        OnPadHit?.Invoke(Action!.Value, true, HitVelocity.GetValueOrDefault(0));
+                        OnPadHit?.Invoke(Action!.Value, true, awardVelocityBonus, false, note.Type, HitVelocity.GetValueOrDefault(0));
 
                         if (awardVelocityBonus)
                         {
@@ -127,7 +188,7 @@ namespace YARG.Core.Engine.Drums.Engines
             // If no note was hit but the user hit a pad, then over hit
             if (PadHit != null)
             {
-                OnPadHit?.Invoke(Action!.Value, false, HitVelocity.GetValueOrDefault(0));
+                OnPadHit?.Invoke(Action!.Value, false, false, ActiveLaneIncludesNote((int) PadHit), DrumNoteType.Neutral, HitVelocity.GetValueOrDefault(0));
                 Overhit();
                 ResetPadState();
             }
@@ -135,8 +196,8 @@ namespace YARG.Core.Engine.Drums.Engines
 
         protected override bool CanNoteBeHit(DrumNote note)
         {
-            return note.Pad == PadHit;
-        }
+            return note.Pad == PadHit || (PadHit != null && note.Pad == (int) FourLaneDrumPad.Wildcard);
+    }
 
         protected override void UpdateBot(double time)
         {
@@ -166,6 +227,36 @@ namespace YARG.Core.Engine.Drums.Engines
             Action = null;
             PadHit = null;
             HitVelocity = null;
+        }
+
+        private bool AutohitNoteFromKickLane(DrumNote note)
+        {
+            if (note.IsKickLane)
+            {
+                if (note.WasHit || note.WasMissed)
+                {
+                    return false;
+                }
+
+                if (note.Time > KickLaneAutohitExpireTime)
+                {
+                    return false;
+                }
+
+                if (note.IsKickLaneStart)
+                {
+                    // The autohit window at the end of the previous kick lane overlaps with the start of this one
+                    // The first note in a lane must be manually hit in order to count
+                    return false;
+                }
+
+                YargLogger.LogFormatTrace("Missed kick with time of {0} was forgiven by kick lane", note.Time);
+                HitNote(note);
+
+                return true;
+            }
+
+            return false;
         }
     }
 }

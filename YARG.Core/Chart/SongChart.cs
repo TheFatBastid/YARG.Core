@@ -1,7 +1,10 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using Melanchall.DryWetMidi.Core;
+using YARG.Core.Chart.Events;
+using YARG.Core.IO;
 using YARG.Core.Logging;
 using YARG.Core.Parsing;
 
@@ -14,12 +17,20 @@ namespace YARG.Core.Chart
     {
         public uint Resolution => SyncTrack.Resolution;
 
+        public float VocalScrollSpeed { get; set; }
+
         public List<TextEvent> GlobalEvents { get; set; } = new();
         public List<Section> Sections { get; set; } = new();
+        public List<CrowdEvent> CrowdEvents { get; set; } = new();
 
         public SyncTrack SyncTrack { get; set; }
         public VenueTrack VenueTrack { get; set; } = new();
         public LyricsTrack Lyrics { get; set; } = new();
+
+        public List<List<LipsyncEvent>> LipsyncEventsByPart { get; set; } = new();
+        public Performer[] SingerPreference { get; set; } = Array.Empty<Performer>();
+        public MiloAnimation.MiloAnimationGenre AnimationGenre   { get; set; }
+
 
         public InstrumentTrack<GuitarNote> FiveFretGuitar { get; set; } = new(Instrument.FiveFretGuitar);
         public InstrumentTrack<GuitarNote> FiveFretCoop { get; set; } = new(Instrument.FiveFretCoopGuitar);
@@ -39,7 +50,6 @@ namespace YARG.Core.Chart
             }
         }
 
-        // Not supported yet
         public InstrumentTrack<GuitarNote> SixFretGuitar { get; set; } = new(Instrument.SixFretGuitar);
         public InstrumentTrack<GuitarNote> SixFretCoop { get; set; } = new(Instrument.SixFretCoopGuitar);
         public InstrumentTrack<GuitarNote> SixFretRhythm { get; set; } = new(Instrument.SixFretRhythm);
@@ -60,7 +70,7 @@ namespace YARG.Core.Chart
         public InstrumentTrack<DrumNote> ProDrums { get; set; } = new(Instrument.ProDrums);
         public InstrumentTrack<DrumNote> FiveLaneDrums { get; set; } = new(Instrument.FiveLaneDrums);
 
-        // public InstrumentTrack<DrumNote> EliteDrums { get; set; } = new(Instrument.EliteDrums);
+        public InstrumentTrack<EliteDrumNote> EliteDrums { get; set; } = new(Instrument.EliteDrums);
 
         public IEnumerable<InstrumentTrack<DrumNote>> DrumsTracks
         {
@@ -129,11 +139,10 @@ namespace YARG.Core.Chart
             SixFretRhythm = loader.LoadGuitarTrack(Instrument.SixFretRhythm);
             SixFretBass = loader.LoadGuitarTrack(Instrument.SixFretBass);
 
-            FourLaneDrums = loader.LoadDrumsTrack(Instrument.FourLaneDrums);
-            ProDrums = loader.LoadDrumsTrack(Instrument.ProDrums);
-            FiveLaneDrums = loader.LoadDrumsTrack(Instrument.FiveLaneDrums);
-
-            // EliteDrums = loader.LoadDrumsTrack(Instrument.EliteDrums);
+            EliteDrums = loader.LoadEliteDrumsTrack(Instrument.EliteDrums); // Load elite first, because the others will fall back to it if they don't natively exist
+            FourLaneDrums = loader.LoadDrumsTrack(Instrument.FourLaneDrums, EliteDrums);
+            ProDrums = loader.LoadDrumsTrack(Instrument.ProDrums, EliteDrums);
+            FiveLaneDrums = loader.LoadDrumsTrack(Instrument.FiveLaneDrums, EliteDrums);
 
             ProGuitar_17Fret = loader.LoadProGuitarTrack(Instrument.ProGuitar_17Fret);
             ProGuitar_22Fret = loader.LoadProGuitarTrack(Instrument.ProGuitar_22Fret);
@@ -148,18 +157,18 @@ namespace YARG.Core.Chart
             // Dj = loader.LoadDjTrack(Instrument.Dj);
 
             // Ensure beatlines are present
-            if (SyncTrack.Beatlines is null or { Count: < 1 })
-            {
-                SyncTrack.GenerateBeatlines(GetLastTick());
-            }
+            SyncTrack.FinishLoading(GetLastTick());
 
             // Use beatlines to place auto-generated drum activation phrases for charts without manually authored phrases
             CreateDrumActivationPhrases();
             // Add range shift phrases, done here since they are parsed from text events
             CreateRangeShiftPhrases();
+            // Add crowd events, done here since they are parsed from text events
+            CreateCrowdEvents();
 
             PostProcessSections();
             FixDrumPhraseEnds();
+            GenerateSingerPreference();
         }
 
         public void Append(SongChart song)
@@ -298,6 +307,49 @@ namespace YARG.Core.Chart
             };
         }
 
+        /// <summary>
+        /// Gets the playable guitar difficulty for a six-fret game mode player.
+        ///
+        /// Natively six-fret instruments read their own track directly. Five-fret instruments have
+        /// their track remapped into legal six-fret chords (see
+        /// <see cref="InstrumentDifficultyExtensions.ConvertFiveFretToSixFret"/> and
+        /// Docs/5fret_to_6fret_conversion.md); gameplay and replay analysis MUST use this same
+        /// mapping or replays will fail verification.
+        /// </summary>
+        /// <remarks>The returned difficulty may be shared chart data for six-fret instruments;
+        /// clone before mutating.</remarks>
+        public InstrumentDifficulty<GuitarNote> GetSixFretPlayableDifficulty(Instrument instrument, Difficulty difficulty,
+            bool leftyFlip = false)
+        {
+            InstrumentDifficulty<GuitarNote> track;
+            if (instrument.IsSixFret())
+            {
+                track = GetSixFretTrack(instrument).GetDifficulty(difficulty);
+            }
+            else
+            {
+                track = GetFiveFretTrack(instrument).GetDifficulty(difficulty).ConvertFiveFretToSixFret();
+            }
+
+            // Lefty flip mirrors the highway, which swaps the black and white pad rows
+            return leftyFlip ? track.FlipSixFretColors() : track;
+        }
+
+        public bool TryGetFiveFretDifficulty(Instrument instrument, Difficulty difficulty, [NotNullWhen(true)] out InstrumentDifficulty<GuitarNote>? track)
+        {
+            return GetFiveFretTrack(instrument).TryGetDifficulty(difficulty, out track);
+        }
+
+        public bool TryGetSixFretDifficulty(Instrument instrument, Difficulty difficulty, [NotNullWhen(true)] out InstrumentDifficulty<GuitarNote>? track)
+        {
+            return GetSixFretTrack(instrument).TryGetDifficulty(difficulty, out track);
+        }
+
+        /// <summary>
+        /// Gets the start time of the first event in this chart
+        /// </summary>
+        /// <returns>double</returns>
+        /// <remarks>This returns double.MaxValue if there are no events</remarks>
         public double GetStartTime()
         {
             static double TrackMin<TNote>(IEnumerable<InstrumentTrack<TNote>> tracks) where TNote : Note<TNote>
@@ -305,7 +357,7 @@ namespace YARG.Core.Chart
             static double VoxMin(IEnumerable<VocalsTrack> tracks)
                 => tracks.Min((track) => track.GetStartTime());
 
-            double totalStartTime = 0;
+            double totalStartTime = double.MaxValue;
 
             // Tracks
 
@@ -362,6 +414,29 @@ namespace YARG.Core.Chart
             // totalEndTime = Math.Max(VenueTrack.GetEndTime(), totalEndTime);
 
             return totalEndTime;
+        }
+
+        /// <summary>
+        /// Gets the start time of the first note in this chart
+        /// </summary>
+        /// <returns>double</returns>
+        /// <remarks>This returns double.MaxValue if there are no notes</remarks>
+        public double GetFirstNoteStartTime()
+        {
+            double TrackMin<TNote>(IEnumerable<InstrumentTrack<TNote>> tracks) where TNote : Note<TNote> =>
+                tracks.Min((track) => track.GetFirstNoteStartTime());
+            double VoxMin(IEnumerable<VocalsTrack> tracks) => tracks.Min((track) => track.GetFirstNoteStartTime());
+
+            double totalStartTime = double.MaxValue;
+
+            totalStartTime = Math.Min(TrackMin(FiveFretTracks), totalStartTime);
+            totalStartTime = Math.Min(TrackMin(SixFretTracks), totalStartTime);
+            totalStartTime = Math.Min(TrackMin(DrumsTracks), totalStartTime);
+            totalStartTime = Math.Min(TrackMin(ProGuitarTracks), totalStartTime);
+            totalStartTime = Math.Min(ProKeys.GetFirstNoteStartTime(), totalStartTime);
+            totalStartTime = Math.Min(VoxMin(VocalsTracks), totalStartTime);
+
+            return totalStartTime;
         }
 
         public double GetLastNoteEndTime()
@@ -463,6 +538,77 @@ namespace YARG.Core.Chart
                 var text = GlobalEvents[index];
                 if (text.Text == TextEvents.END_MARKER)
                     return text;
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Gets the music_start and music_end events, if they exist.
+        /// </summary>
+        /// <returns>Named tuple, null if one or both are not found</returns>
+        /// <remarks>Null is returned if both are not found as that is considered a charting error</remarks>
+        public (TextEvent? musicStart, TextEvent? musicEnd) GetMusicEvents()
+        {
+            TextEvent? musicStart = null;
+            TextEvent? musicEnd = null;
+            // Search the first 20 events for music_start (surely there won't be more before it?)
+            for (var i = 0; i < 20; i++)
+            {
+                if (GlobalEvents.Count <= i)
+                {
+                    break;
+                }
+
+                var text = GlobalEvents[i];
+                if (text.Text == TextEvents.MUSIC_START)
+                {
+                    musicStart = text;
+                    break;
+                }
+            }
+
+            // If we didn't find start, don't bother looking for end
+            if (musicStart == null)
+            {
+                return (null, null);
+            }
+
+            // Reverse search the last 20 events for music_end
+            for (var i = 1; i <= 20; i++)
+            {
+                int index = GlobalEvents.Count - i;
+                if (index < 0)
+                {
+                    break;
+                }
+
+                var text = GlobalEvents[index];
+                if (text.Text == TextEvents.MUSIC_END)
+                {
+                    musicEnd = text;
+                    break;
+                }
+            }
+
+            if (musicEnd == null)
+            {
+                return (null, null);
+            }
+
+            return (musicStart, musicEnd);
+        }
+
+        public TextEvent? GetCodaEvent()
+        {
+            // Reverse search since coda is near the end
+            for (int i = GlobalEvents.Count - 1; i >= 0; i--)
+            {
+                var text = GlobalEvents[i];
+                if (text.Text == TextEvents.BIG_ROCK_ENDING_START)
+                {
+                    return text;
+                }
             }
 
             return null;

@@ -9,9 +9,19 @@ namespace YARG.Core.Chart
 
         public int Pad { get; }
 
+        public bool IsDoubleKick { get; }
+
         public DrumNoteType Type { get; set; }
+        public DrumStem Stem { get; }
 
         private int _padMask;
+
+        // Base class IsLane fields reflect only hand lanes (regular trills and tremolos)
+        public bool IsKickLane => (DrumFlags & DrumNoteFlags.KickLane) != 0;
+        public bool IsKickLaneStart => (DrumFlags & DrumNoteFlags.KickLaneStart) != 0;
+        public bool IsKickLaneEnd => (DrumFlags & DrumNoteFlags.KickLaneEnd) != 0;
+
+        public override bool IsAnyLane => IsLane || IsKickLane;
 
         public bool IsNeutral => Type == DrumNoteType.Neutral;
         public bool IsAccent  => Type == DrumNoteType.Accent;
@@ -21,23 +31,27 @@ namespace YARG.Core.Chart
 
         public bool IsStarPowerActivator => (DrumFlags & DrumNoteFlags.StarPowerActivator) != 0;
 
+        public override int LaneNote => Pad;
+
         public DrumNote(FourLaneDrumPad pad, DrumNoteType noteType, DrumNoteFlags drumFlags,
-            NoteFlags flags, double time, uint tick)
-            : this((int)pad, noteType, drumFlags, flags, time, tick)
+            NoteFlags flags, double time, uint tick, bool isDoubleKick = false, DrumStem drumStem = DrumStem.Else)
+            : this((int)pad, noteType, drumFlags, flags, time, tick, isDoubleKick, drumStem)
         {
         }
 
         public DrumNote(FiveLaneDrumPad pad, DrumNoteType noteType, DrumNoteFlags drumFlags,
-            NoteFlags flags, double time, uint tick)
-            : this((int)pad, noteType, drumFlags, flags, time, tick)
+            NoteFlags flags, double time, uint tick, bool isDoubleKick = false, DrumStem drumStem = DrumStem.Else)
+            : this((int)pad, noteType, drumFlags, flags, time, tick, isDoubleKick, drumStem)
         {
         }
 
-        public DrumNote(int pad, DrumNoteType noteType, DrumNoteFlags drumFlags, NoteFlags flags, double time, uint tick)
+        public DrumNote(int pad, DrumNoteType noteType, DrumNoteFlags drumFlags, NoteFlags flags, double time, uint tick, bool isDoubleKick = false, DrumStem drumStem = DrumStem.Else)
             : base(flags, time, 0, tick, 0)
         {
             Pad = pad;
             Type = noteType;
+            IsDoubleKick = isDoubleKick;
+            Stem = drumStem;
 
             DrumFlags = _drumFlags = drumFlags;
 
@@ -48,6 +62,8 @@ namespace YARG.Core.Chart
         {
             Pad = other.Pad;
             Type = other.Type;
+            IsDoubleKick = other.IsDoubleKick;
+            Stem = other.Stem;
 
             DrumFlags = _drumFlags = other._drumFlags;
 
@@ -76,6 +92,12 @@ namespace YARG.Core.Chart
             DrumFlags |= drumNoteFlag;
         }
 
+        public void ClearFlag(DrumNoteFlags drumNoteFlag)
+        {
+            _drumFlags &= ~drumNoteFlag;
+            DrumFlags &= ~drumNoteFlag;
+        }
+
         protected override void CopyFlags(DrumNote other)
         {
             _drumFlags = other._drumFlags;
@@ -102,6 +124,8 @@ namespace YARG.Core.Chart
         YellowCymbal,
         BlueCymbal,
         GreenCymbal,
+
+        Wildcard = 9,
     }
 
     public enum FiveLaneDrumPad
@@ -113,6 +137,8 @@ namespace YARG.Core.Chart
         Blue,
         Orange,
         Green,
+
+        Wildcard = 9,
     }
 
     public enum DrumNoteType
@@ -128,5 +154,16 @@ namespace YARG.Core.Chart
         None = 0,
 
         StarPowerActivator = 1 << 0,
+        KickLane = 1 << 1,
+        KickLaneStart = 1 << 2,
+        KickLaneEnd = 1 << 3,
+    }
+
+    public enum DrumStem
+    {
+        Kick,
+        Snare,
+        Toms,
+        Else,
     }
 }

@@ -15,6 +15,7 @@ namespace YARG.Core.Song
         private CONFileListing? _moggListing;
         private CONFileListing? _miloListing;
         private CONFileListing? _imgListing;
+        private CONFileListing? _vocListing;
         private string          _psuedoDirectory;
 
         public override EntryType SubType => EntryType.CON;
@@ -28,6 +29,7 @@ namespace YARG.Core.Song
             base.Serialize(stream, node);
         }
 
+        #nullable disable
         public override YARGImage LoadAlbumData()
         {
             var image = LoadUpdateAlbumData();
@@ -38,42 +40,52 @@ namespace YARG.Core.Song
             }
             return image;
         }
+        #nullable restore
 
-        public override BackgroundResult? LoadBackground()
+        public override BackgroundResult? LoadBackground(bool enableCensoring, bool excludeYarground = false)
         {
             if (_midiListing == null)
             {
                 return null;
             }
 
-            string actualDirectory = Path.GetDirectoryName(_root.FullName)!;
-            string conName = Path.GetFileNameWithoutExtension(_root.FullName);
-            string specifcVenue = Path.Combine(actualDirectory, _subName + YARGROUND_EXTENSION);
-            if (File.Exists(specifcVenue))
-            {
-                var stream = File.OpenRead(specifcVenue);
-                return new BackgroundResult(BackgroundType.Yarground, stream);
-            }
+            return LoadExternalBackground(_root.FullName, _subName, excludeYarground, enableCensoring);
+        }
 
-            specifcVenue = Path.Combine(actualDirectory, conName + YARGROUND_EXTENSION);
-            if (File.Exists(specifcVenue))
+        internal static BackgroundResult? LoadExternalBackground(string conPath, string subName, bool excludeYarground, bool enableCensoring)
+        {
+            string actualDirectory = Path.GetDirectoryName(conPath)!;
+            string conName = Path.GetFileName(conPath);
+            string conNameWithoutExtension = Path.GetFileNameWithoutExtension(conPath);
+            string censorSuffix = enableCensoring ? CLEAN_BACKGROUND_SUFFIX : EXPLICIT_BACKGROUND_SUFFIX;
+            foreach (var name in GetPackedConBackgroundNames(subName, conName, conNameWithoutExtension))
             {
-                var stream = File.OpenRead(specifcVenue);
-                return new BackgroundResult(BackgroundType.Yarground, stream);
+                string specificVenue = Path.Combine(actualDirectory, name + YARGROUND_EXTENSION);
+                if (File.Exists(specificVenue) && !excludeYarground)
+                {
+                    var stream = File.OpenRead(specificVenue);
+                    return new BackgroundResult(BackgroundType.Yarground, stream);
+                }
             }
 
             var venues = Directory.GetFiles(actualDirectory, YARGROUND_EXTENSION);
-            if (venues.Length > 0)
+            if (venues.Length > 0 && !excludeYarground)
             {
                 var stream = File.OpenRead(venues[BACKROUND_RNG.Next(venues.Length)]);
                 return new BackgroundResult(BackgroundType.Yarground, stream);
             }
 
-            foreach (var name in new[]{ _subName, conName, "bg", "background", "video" })
+            foreach (var name in GetPackedBackgroundNames(subName, conName, conNameWithoutExtension, includeVideo: true))
             {
                 string fileBase = Path.Combine(actualDirectory, name);
                 foreach (var ext in VIDEO_EXTENSIONS)
                 {
+                    string censoredPath = fileBase + censorSuffix + ext;
+                    if (File.Exists(censoredPath))
+                    {
+                        var stream = File.OpenRead(censoredPath);
+                        return new BackgroundResult(BackgroundType.Video, stream);
+                    }
                     string backgroundPath = fileBase + ext;
                     if (File.Exists(backgroundPath))
                     {
@@ -83,11 +95,20 @@ namespace YARG.Core.Song
                 }
             }
 
-            foreach (var name in new[]{ _subName, conName, "bg", "background" })
+            foreach (var name in GetPackedBackgroundNames(subName, conName, conNameWithoutExtension, includeVideo: false))
             {
                 var fileBase = Path.Combine(actualDirectory, name);
                 foreach (var ext in IMAGE_EXTENSIONS)
                 {
+                    string censoredPath = fileBase + censorSuffix + ext;
+                    if (File.Exists(censoredPath))
+                    {
+                        var image = YARGImage.Load(censoredPath);
+                        if (image != null)
+                        {
+                            return new BackgroundResult(image);
+                        }
+                    }
                     string backgroundPath = fileBase + ext;
                     if (File.Exists(backgroundPath))
                     {
@@ -102,12 +123,49 @@ namespace YARG.Core.Song
             return null;
         }
 
+        private static IEnumerable<string> GetPackedConBackgroundNames(string subName, string conName, string conNameWithoutExtension)
+        {
+            yield return subName;
+            yield return conName;
+
+            if (conNameWithoutExtension != conName)
+            {
+                yield return conNameWithoutExtension;
+            }
+        }
+
+        private static IEnumerable<string> GetPackedBackgroundNames(string subName, string conName, string conNameWithoutExtension, bool includeVideo)
+        {
+            foreach (var name in GetPackedConBackgroundNames(subName, conName, conNameWithoutExtension))
+            {
+                yield return name;
+            }
+
+            yield return "bg";
+            yield return "background";
+
+            if (includeVideo)
+            {
+                yield return "video";
+            }
+        }
+
         public override FixedArray<byte>? LoadMiloData()
         {
             var data = LoadUpdateMiloData();
             if (data == null && _miloListing != null)
             {
                 data = CONFileStream.LoadFile(_root.FullName, _miloListing);
+            }
+            return data;
+        }
+
+        public override FixedArray<byte>? LoadVocData()
+        {
+            var data = LoadUpdateVocData();
+            if (data == null && _vocListing != null)
+            {
+                data = CONFileStream.LoadFile(_root.FullName, _vocListing);
             }
             return data;
         }
@@ -169,9 +227,12 @@ namespace YARG.Core.Song
                 long moggLocation = CONFileStream.CalculateBlockLocation(entry._moggListing.BlockOffset, entry._moggListing.Shift);
                 lock (stream)
                 {
-                    if (stream.Seek(moggLocation, SeekOrigin.Begin) != moggLocation || stream.Read<int>(Endianness.Little) != UNENCRYPTED_MOGG)
+                    var moggResult = stream.Seek(moggLocation, SeekOrigin.Begin) == moggLocation
+                        ? ValidateMoggHeader(stream)
+                        : ScanResult.MoggError;
+                    if (moggResult != ScanResult.Success)
                     {
-                        return new ScanUnexpected(ScanResult.MoggError);
+                        return new ScanUnexpected(moggResult);
                     }
                     mainMidi = CONFileStream.LoadFile(stream, entry._midiListing);
                 }
@@ -188,6 +249,7 @@ namespace YARG.Core.Song
                 string genPath = $"songs/{entry._subName}/gen/{entry._subName}";
                 listings.FindListing(genPath + ".milo_xbox", out entry._miloListing);
                 listings.FindListing(genPath + "_keep.png_xbox", out entry._imgListing);
+                listings.FindListing(location.Value + ".voc", out entry._vocListing);
                 entry.SetSortStrings();
                 return entry;
             }
@@ -224,6 +286,7 @@ namespace YARG.Core.Song
             string genPath = $"songs/{entry._subName}/gen/{entry._subName}";
             listings.FindListing(genPath + ".milo_xbox", out entry._miloListing);
             listings.FindListing(genPath + "_keep.png_xbox", out entry._imgListing);
+            listings.FindListing(location + ".voc", out entry._vocListing);
             return entry;
         }
 
@@ -241,6 +304,7 @@ namespace YARG.Core.Song
                 string location = $"songs/{entry._subName}/{entry._subName}";
                 listings.FindListing(location + ".mid", out entry._midiListing);
                 listings.FindListing(location + ".mogg", out entry._moggListing);
+                listings.FindListing(location + ".voc", out entry._vocListing);
 
 
                 string genPath = $"songs/{entry._subName}/gen/{entry._subName}";

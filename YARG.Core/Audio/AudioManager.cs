@@ -1,10 +1,26 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using YARG.Core.Logging;
 
 namespace YARG.Core.Audio
 {
+    public readonly struct OutputBufferInfo
+    {
+        public int[] SupportedLengths { get; }
+        public int PreferredLength { get; }
+        public int SampleRate { get; }
+        public bool IsDriverControlled { get; }
+
+        public OutputBufferInfo(int[] supportedLengths, int preferredLength, int sampleRate, bool isDriverControlled)
+        {
+            SupportedLengths = supportedLengths;
+            PreferredLength = preferredLength;
+            SampleRate = sampleRate;
+            IsDriverControlled = isDriverControlled;
+        }
+    }
+
     public abstract class AudioManager
     {
         private static float _globalSpeed = 1f;
@@ -12,24 +28,27 @@ namespace YARG.Core.Audio
         private bool _disposed;
         private List<StemMixer> _activeMixers = new();
 
-        protected internal readonly SampleChannel[]     SfxSamples     = new SampleChannel[AudioHelpers.SfxPaths.Count];
-        protected internal readonly DrumSampleChannel[] DrumSfxSamples = new DrumSampleChannel[AudioHelpers.DrumSfxPaths.Count];
+        protected internal SampleChannel[]          SfxSamples       = new SampleChannel[AudioHelpers.SfxSamples.Count];
+        protected internal DrumSampleChannel[]      DrumSfxSamples   = new DrumSampleChannel[AudioHelpers.DrumSamples.Count];
+        protected internal VoxSampleChannel[]       VoxSamples       = new VoxSampleChannel[AudioHelpers.VoxSamples.Count];
+        protected internal MetronomeSampleChannel[] MetronomeSamples = new MetronomeSampleChannel[AudioHelpers.MetronomeSamples.Count];
+        protected internal Dictionary<string, VenueSampleChannel>  VenueSamples     = new();
         protected internal int PlaybackLatency;
         protected internal int MinimumBufferLength;
         protected internal int MaximumBufferLength;
 
         protected internal abstract ReadOnlySpan<string> SupportedFormats { get; }
 
-        internal StemMixer? LoadCustomFile(string name, Stream stream, float speed, double volume, SongStem stem = SongStem.Song)
+        internal StemMixer? LoadCustomFile(string name, Stream stream, float speed, double volume, bool normalize, SongStem stem = SongStem.Song)
         {
             YargLogger.LogDebug("Loading custom audio file");
-            var mixer = CreateMixer(name, stream, speed, volume, false);
+            var mixer = CreateMixer(name, speed, volume, clampStemVolume: false, normalize: normalize);
             if (mixer == null)
             {
                 return null;
             }
 
-            if (!mixer.AddChannel(stem))
+            if (!mixer.AddChannel(stream, stem))
             {
                 mixer.Dispose();
                 return null;
@@ -38,10 +57,10 @@ namespace YARG.Core.Audio
             return mixer;
         }
 
-        internal StemMixer? LoadCustomFile(string file, float speed, double volume, SongStem stem = SongStem.Song)
+        internal StemMixer? LoadCustomFile(string file, float speed, double volume, bool normalize, SongStem stem = SongStem.Song)
         {
             var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read, 1);
-            var mixer = LoadCustomFile(file, stream, speed, volume, stem);
+            var mixer = LoadCustomFile(file, stream, speed, volume, normalize, stem);
             if (mixer == null)
             {
                 YargLogger.LogFormatError("Failed to load audio file{0}!", file);
@@ -51,43 +70,85 @@ namespace YARG.Core.Audio
             return mixer;
         }
 
-        protected internal abstract StemMixer? CreateMixer(string name, float speed, double volume, bool clampStemVolume);
+        protected internal abstract StemMixer? CreateMixer(string name, float speed, double volume, bool clampStemVolume, bool normalize);
 
-        protected internal abstract StemMixer? CreateMixer(string name, Stream stream, float speed, double volume, bool clampStemVolume);
+        protected internal abstract List<InputDeviceInfo> GetAllInputDevices();
 
-        protected internal abstract MicDevice? GetInputDevice(string name);
+        protected internal abstract MicDevice? CreateInputDevice(InputDeviceInfo device);
 
-        protected internal abstract List<(int id, string name)> GetAllInputDevices();
+        protected internal virtual MicDevice? GetInputDevice(string name)
+        {
+            if (InputDeviceInfo.TryParseDisplayName(name, out var baseName, out var channel))
+            {
+                return GetInputDevice(baseName, channel);
+            }
+            return null;
+        }
 
-        protected internal abstract MicDevice? CreateDevice(int deviceId, string name);
+        protected internal virtual MicDevice? GetInputDevice(string baseName, int channel)
+        {
+            var info = new InputDeviceInfo(-1, baseName, channel, channel + 1);
+            return CreateInputDevice(info);
+        }
+
+        protected internal abstract OutputChannel? CreateOutputChannel(int channelId);
+
+        protected internal abstract List<(int id, string name)> GetAllOutputDevices();
+
+        protected internal abstract int GetOutputChannelCount();
+
+        protected internal virtual OutputBufferInfo? GetOutputBufferInfo() => null;
+
+        protected internal virtual bool OpenOutputControlPanel() => false;
+
+        protected internal virtual void Update() { }
+
+        /// <summary>
+        /// The driver family a device name belongs to. Classification lives with the
+        /// transport implementations, not with name parsing in callers.
+        /// </summary>
+        protected internal virtual AudioOutputMode GetOutputMode(string name) =>
+            AudioOutputMode.Shared;
 
         protected internal abstract void SetMasterVolume(double volume);
 
-        internal void ToggleBuffer(bool enable)
+        public abstract void LoadVenueSample(string name, byte[] sampleData, OutputChannel? outputChannel = null);
+
+        public abstract void ClearVenueSamples();
+
+        protected internal abstract void PlayMetronomeSoundEffectToChannel(MetronomeSample sample,
+            MetronomePitch pitch, int channelId);
+
+        protected internal virtual void SetOutputChannel(OutputChannel channel)
         {
-            ToggleBuffer_Internal(enable);
-            lock (_activeMixers)
+            foreach (StemMixer mixer in SnapshotActiveMixers())
             {
-                foreach (var mixer in _activeMixers)
-                {
-                    mixer.ToggleBuffer(enable);
-                }
+                mixer.SetOutputChannel(channel);
             }
         }
+
+        protected internal abstract bool SetOutputDevice(string name);
+
+        protected internal virtual bool ReinitializeOutput() => false;
+
+        protected void MoveActiveMixersTo(OutputDevice device)
+        {
+            foreach (StemMixer mixer in SnapshotActiveMixers())
+            {
+                mixer.SetOutputDevice(device);
+            }
+        }
+
 
         internal void SetBufferLength(int length)
         {
             SetBufferLength_Internal(length);
-            lock (_activeMixers)
+            foreach (var mixer in SnapshotActiveMixers())
             {
-                foreach (var mixer in _activeMixers)
-                {
-                    mixer.SetBufferLength(length);
-                }
+                mixer.SetBufferLength(length);
             }
         }
 
-        protected abstract void ToggleBuffer_Internal(bool enable);
 
         protected abstract void SetBufferLength_Internal(int length);
 
@@ -102,13 +163,20 @@ namespace YARG.Core.Audio
                 }
 
                 _globalSpeed = value;
-                lock (_activeMixers)
+                foreach (var mixer in SnapshotActiveMixers())
                 {
-                    foreach (var mixer in _activeMixers)
-                    {
-                        mixer.SetSpeed(value, true);
-                    }
+                    mixer.SetPlaybackSpeed(value);
                 }
+            }
+        }
+
+        private StemMixer[] SnapshotActiveMixers()
+        {
+            // Mixer disposal removes itself from this list while holding mixer lock.
+            // Release list lock before calling into any mixer to avoid lock inversion.
+            lock (_activeMixers)
+            {
+                return _activeMixers.ToArray();
             }
         }
 
@@ -175,6 +243,21 @@ namespace YARG.Core.Audio
                     }
 
                     foreach (var sample in DrumSfxSamples)
+                    {
+                        sample?.Dispose();
+                    }
+
+                    foreach (var sample in VoxSamples)
+                    {
+                        sample?.Dispose();
+                    }
+
+                    foreach (var sample in MetronomeSamples)
+                    {
+                        sample?.Dispose();
+                    }
+
+                    foreach (var sample in VenueSamples.Values)
                     {
                         sample?.Dispose();
                     }

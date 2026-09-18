@@ -11,9 +11,11 @@ namespace YARG.Core.Engine.Vocals
     {
         protected const int POINTS_PER_PERCUSSION = 100;
 
+        protected VocalNote? CarriedVocalNote;
+
         public delegate void TargetNoteChangeEvent(VocalNote targetNote);
 
-        public delegate void PhraseHitEvent(double hitPercentAfterParams, bool fullPoints);
+        public delegate void PhraseHitEvent(double hitPercentAfterParams, bool fullPoints, bool isLastPhrase);
 
         public TargetNoteChangeEvent? OnTargetNoteChanged;
 
@@ -57,6 +59,14 @@ namespace YARG.Core.Engine.Vocals
             VocalsEngineParameters engineParameters, bool isBot)
             : base(chart, syncTrack, engineParameters, false, isBot)
         {
+            foreach (var note in Notes)
+            {
+                // Percussion phrases do not count as phrases, they cannot be hit and do not increment combo.
+                if (note.IsPercussionPhrase)
+                {
+                    BaseStats.TotalNotes--;
+                }
+            }
         }
 
         public override void Reset(bool keepCurrentButtons = false)
@@ -134,20 +144,7 @@ namespace YARG.Core.Engine.Vocals
                     EngineStats.StarPowerPhrasesHit++;
                 }
 
-                if (note.IsSoloStart)
-                {
-                    StartSolo();
-                }
-
-                if (IsSoloActive)
-                {
-                    Solos[CurrentSoloIndex].NotesHit++;
-                }
-
-                if (note.IsSoloEnd)
-                {
-                    EndSolo();
-                }
+                HandleSoloNote(note);
 
                 // If there aren't any ticks in the phrase, then don't add
                 // any score or update the multiplier.
@@ -161,10 +158,11 @@ namespace YARG.Core.Engine.Vocals
                     UpdateMultiplier();
                 }
 
-                // No matter what, we still wanna count this as a phrase hit though
-                EngineStats.NotesHit++;
-
-                OnNoteHit?.Invoke(NoteIndex, note);
+                if (!note.IsPercussionPhrase)
+                {
+                    EngineStats.IncrementNotesHit(note, CurrentTime);
+                    OnNoteHit?.Invoke(NoteIndex, note);
+                }
 
                 // I want to call base.HitNote here, but I have no idea how vocals handles hit state so I'm scared to
                 NoteIndex++;
@@ -193,14 +191,7 @@ namespace YARG.Core.Engine.Vocals
                 StripStarPower(note);
             }
 
-            if (note.IsSoloEnd)
-            {
-                EndSolo();
-            }
-            if (note.IsSoloStart)
-            {
-                StartSolo();
-            }
+            HandleSoloNote(note);
 
             ResetCombo();
 
@@ -224,33 +215,50 @@ namespace YARG.Core.Engine.Vocals
         /// <returns>
         /// Gets the amount of ticks in the phrase.
         /// </returns>
-        protected static uint GetTicksInPhrase(VocalNote phrase)
+        protected uint GetTicksInPhrase(VocalNote phrase)
         {
             uint totalTime = 0;
-            foreach (var phraseNote in phrase.ChildNotes)
+            foreach (var noteInPhrase in phrase.ChildNotes)
             {
-                if (phraseNote.IsPercussion)
+                if (noteInPhrase.IsPercussion)
                 {
                     continue;
                 }
 
-                totalTime += phraseNote.TotalTickLength;
+                // If the note continues past the end of the current phrase, clamp it to the end of the phrase instead.
+                totalTime += phrase.GetTicksForNote(noteInPhrase);
             }
 
+            if (CarriedVocalNote != null)
+            {
+                totalTime += phrase.GetTicksForNote(CarriedVocalNote);
+            }
             return totalTime;
         }
 
         /// <returns>
         /// The note in the specified <paramref name="phrase"/> at the specified song <paramref name="tick"/>.
         /// </returns>
-        protected static VocalNote? GetNoteInPhraseAtSongTick(VocalNote phrase, uint tick)
+        protected VocalNote? GetNoteInPhraseAtSongTick(VocalNote phrase, uint tick)
         {
-            return phrase
-                .ChildNotes
-                .FirstOrDefault(phraseNote =>
-                    !phraseNote.IsPercussion &&
+            if (CarriedVocalNote != null && tick >= CarriedVocalNote.Tick && tick <= CarriedVocalNote.TotalTickEnd)
+            {
+                return CarriedVocalNote;
+            }
+
+            var childNotes = phrase.ChildNotes;
+            for (int i = 0; i < childNotes.Count; i++)
+            {
+                var phraseNote = childNotes[i];
+                if (!phraseNote.IsPercussion &&
                     tick >= phraseNote.Tick &&
-                    tick <= phraseNote.TotalTickEnd);
+                    tick <= phraseNote.TotalTickEnd)
+                {
+                    return phraseNote;
+                }
+            }
+
+            return null;
         }
 
         protected static VocalNote? GetNextPercussionNote(VocalNote phrase, uint tick)
@@ -313,27 +321,57 @@ namespace YARG.Core.Engine.Vocals
             }
         }
 
-        protected sealed override int CalculateBaseScore()
+        protected sealed override (int baseScore, int noteScore) CalculateChartScores()
         {
-            double score = 0;
+            double baseScore = 0;
+            double noteScore = 0;
             int combo = 0;
             int multiplier;
-            double weight;
-            foreach (var note in Notes.Where(note => note.ChildNotes.Any()))
+            foreach (var note in Notes)
             {
-                // Get the current multiplier given the current combo
+                if (note.ChildNotes.Count == 0)
+                {
+                    continue;
+                };
                 multiplier = Math.Min(combo + 1, BaseParameters.MaxMultiplier);
-
-                // invert it to calculate leniency
-                weight = 1.0 * multiplier / BaseParameters.MaxMultiplier;
-                score += weight * EngineParameters.PointsPerPhrase;
+                if (note.IsPercussionPhrase)
+                {
+                    // Intentionally not counting percussion notes for base score so they don't affect star calculations
+                    // baseScore += POINTS_PER_PERCUSSION * note.ChildNotes.Count * multiplier;
+                    // noteScore += POINTS_PER_PERCUSSION * note.ChildNotes.Count;
+                    continue;
+                }
+                baseScore += multiplier * EngineParameters.PointsPerPhrase;
+                noteScore += EngineParameters.PointsPerPhrase;
                 combo++;
             }
 
-            YargLogger.LogDebug($"[Vocals] Base score: {score}, Max Combo: {combo}");
-            return (int) Math.Round(score);
+            YargLogger.LogDebug($"[Vocals] Base score: {baseScore}, Max Combo: {combo}");
+            return ((int) Math.Round(baseScore), (int) Math.Round(noteScore));
         }
 
         protected override bool CanSustainHold(VocalNote note) => throw new InvalidOperationException();
+
+        protected virtual void UpdateCarriedNote(VocalNote phrase)
+        {
+            if (CarriedVocalNote != null && CarriedVocalNote.TotalTickEnd > phrase.TickEnd)
+            {
+                // Keep the current Carried Vocal Note if it continues past the end of the current phrase.
+                // This can happen for notes that span across 3 or more phrases.
+                return;
+            }
+
+            CarriedVocalNote = null;
+            foreach (var note in phrase.ChildNotes)
+            {
+                if (!note.IsPercussion && note.TotalTickEnd > phrase.TickEnd)
+                {
+                    CarriedVocalNote = note;
+                    break;
+                }
+            }
+
+            EngineStats.HasCarryNote = CarriedVocalNote != null;
+        }
     }
 }

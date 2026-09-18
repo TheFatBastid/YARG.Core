@@ -7,7 +7,7 @@ namespace YARG.Core.Chart
     /// <summary>
     /// An instrument track and all of its difficulties.
     /// </summary>
-    public class SyncTrack
+    public class SyncTrack : ICloneable<SyncTrack>
     {
         /// <returns>
         /// The power of two to multiply the denominator by to increase the beatline rate.
@@ -20,6 +20,7 @@ namespace YARG.Core.Chart
 
         public List<TempoChange> Tempos { get; } = new();
         public List<TimeSignatureChange> TimeSignatures { get; } = new();
+        public List<Beatline> StrongBeatlines { get; } = new();
         public List<Beatline> Beatlines { get; } = new();
 
         public SyncTrack(uint resolution)
@@ -39,8 +40,33 @@ namespace YARG.Core.Chart
             TimeSignatures = timeSignatures;
             Beatlines = beatlines;
 
+            RefreshStrongBeats();
+
             Tempos.Sort((x, y) => x.Tick.CompareTo(y.Tick));
             TimeSignatures.Sort((x, y) => x.Tick.CompareTo(y.Tick));
+        }
+
+        public SyncTrack Clone()
+        {
+            return new(
+                Resolution,
+                Tempos.Duplicate(),
+                TimeSignatures.Duplicate(),
+                Beatlines.Duplicate()
+            );
+        }
+
+        public void FinishLoading(uint lastTick)
+        {
+            if (Beatlines is null or { Count: < 1 })
+            {
+                GenerateBeatlines(lastTick);
+            }
+
+            if (StrongBeatlines.Count < 1)
+            {
+                RefreshStrongBeats();
+            }
         }
 
         /// <summary>
@@ -204,6 +230,7 @@ namespace YARG.Core.Chart
             GenerateBeatsForTimeSignature(currentTimeSig, finalStartTick, lastTick);
 
             Beatlines.TrimExcess();
+            RefreshStrongBeats();
 
             void GenerateBeatsForTimeSignature(TimeSignatureChange timeSignature, uint startTick, uint endTick)
             {
@@ -235,6 +262,20 @@ namespace YARG.Core.Chart
                     currentTick += beatlineTickRate;
                 }
             }
+        }
+
+        private void RefreshStrongBeats()
+        {
+            StrongBeatlines.Clear();
+            StrongBeatlines.Capacity = Beatlines.Count;
+            foreach (var beatline in Beatlines)
+            {
+                if (beatline.Type != BeatlineType.Weak)
+                {
+                    StrongBeatlines.Add(beatline);
+                }
+            }
+            StrongBeatlines.TrimExcess();
         }
 
         public double TickToTime(uint tick)
@@ -337,6 +378,93 @@ namespace YARG.Core.Chart
             return TickToTime(quarterTick);
         }
 
+        /// <summary>
+        /// Finds the smallest time such that TimeToMeasureTick(time) equals the target tick.
+        /// Uses binary search for O(log n) complexity.
+        /// </summary>
+        public double FindMinTimeForMeasureTick(uint targetTick)
+        {
+            double approxTime = MeasureTickToTime(targetTick);
+
+            if (TimeToMeasureTick(approxTime) == targetTick)
+            {
+                return FindMinTimeBackward(approxTime, targetTick);
+            }
+
+            return BinarySearchForTick(targetTick, approxTime);
+        }
+
+        private double FindMinTimeBackward(double startTime, uint targetTick)
+        {
+            double low = 0;
+            double high = startTime;
+            double epsilon = 1e-10;
+
+            while (high - low > epsilon)
+            {
+                double mid = (low + high) / 2;
+                if (TimeToMeasureTick(mid) == targetTick)
+                {
+                    high = mid;
+                }
+                else
+                {
+                    low = mid;
+                }
+            }
+
+            return high;
+        }
+
+        private double BinarySearchForTick(uint targetTick, double approxTime)
+        {
+            double low, high;
+            uint currentTick = TimeToMeasureTick(approxTime);
+
+            if (currentTick < targetTick)
+            {
+                low = approxTime;
+                high = approxTime * 2;
+                while (TimeToMeasureTick(high) < targetTick)
+                {
+                    low = high;
+                    high *= 2;
+                }
+            }
+            else
+            {
+                high = approxTime;
+                low = approxTime / 2;
+                while (TimeToMeasureTick(low) > targetTick)
+                {
+                    high = low;
+                    low /= 2;
+                }
+            }
+
+            double epsilon = 1e-10;
+            while (high - low > epsilon)
+            {
+                double mid = (low + high) / 2;
+                uint midTick = TimeToMeasureTick(mid);
+
+                if (midTick == targetTick)
+                {
+                    return FindMinTimeBackward(mid, targetTick);
+                }
+                else if (midTick < targetTick)
+                {
+                    low = mid;
+                }
+                else
+                {
+                    high = mid;
+                }
+            }
+
+            return high;
+        }
+
         public double GetStartTime()
         {
             // The sync track always starts at the very beginning of the chart
@@ -367,6 +495,125 @@ namespace YARG.Core.Chart
             totalLastTick = Math.Max(TimeSignatures.GetLastTick(), totalLastTick);
 
             return totalLastTick;
+        }
+
+        public double GetStrongBeatPosition(uint quarterTick)
+        {
+            int beatIndex = StrongBeatlines.LowerBound(quarterTick);
+            if (beatIndex < 0)
+            {
+                return 0;
+            }
+
+            if (beatIndex + 1 >= StrongBeatlines.Count)
+            {
+                return beatIndex;
+            }
+
+            var currentBeat = StrongBeatlines[beatIndex];
+            var nextBeat = StrongBeatlines[beatIndex + 1];
+            return beatIndex + YargMath.InverseLerpD(currentBeat.Tick, nextBeat.Tick, quarterTick);
+        }
+
+        public double GetWeakBeatPosition(uint quarterTick)
+        {
+            int beatIndex = Beatlines.LowerBound(quarterTick);
+            if (beatIndex < 0)
+            {
+                return 0;
+            }
+
+            if (beatIndex + 1 >= Beatlines.Count)
+            {
+                return beatIndex;
+            }
+
+            var currentBeat = Beatlines[beatIndex];
+            var nextBeat = Beatlines[beatIndex + 1];
+            return beatIndex + YargMath.InverseLerpD(currentBeat.Tick, nextBeat.Tick, quarterTick);
+        }
+
+        public double GetDenominatorBeatPosition(uint quarterTick)
+        {
+            int timeSigIndex = TimeSignatures.LowerBound(quarterTick);
+            if (timeSigIndex < 0)
+            {
+                return 0;
+            }
+
+            var timeSig = TimeSignatures[timeSigIndex];
+
+            // Interrupted time signatures need special handling for correct results
+            if (timeSig.IsInterrupted)
+            {
+                var nextTimeSig = TimeSignatures[timeSigIndex + 1];
+                return timeSig.DenominatorBeatCount + timeSig.GetDenominatorBeatProgress(quarterTick, nextTimeSig, Resolution);
+            }
+
+            return timeSig.DenominatorBeatCount + timeSig.GetDenominatorBeatProgress(quarterTick, Resolution);
+        }
+
+        public double GetQuarterNotePosition(uint quarterTick)
+        {
+            var timeSig = TimeSignatures.LowerBoundElement(quarterTick);
+            if (timeSig is null)
+            {
+                return 0;
+            }
+
+            // Interrupted time signatures do not require special handling here,
+            // they have no bearing on how long a quarter note lasts in ticks
+            return timeSig.QuarterNoteCount + timeSig.GetQuarterNoteProgress(quarterTick, Resolution);
+        }
+
+        public double GetMeasurePosition(uint quarterTick)
+        {
+            int timeSigIndex = TimeSignatures.LowerBound(quarterTick);
+            if (timeSigIndex < 0)
+            {
+                return 0;
+            }
+
+            var timeSig = TimeSignatures[timeSigIndex];
+
+            // Interrupted time signatures need special handling for correct results
+            if (timeSig.IsInterrupted)
+            {
+                var nextTimeSig = TimeSignatures[timeSigIndex + 1];
+                return timeSig.MeasureCount + timeSig.GetMeasureProgress(quarterTick, nextTimeSig);
+            }
+
+            return timeSig.MeasureCount + timeSig.GetMeasureProgress(quarterTick, Resolution);
+        }
+
+        public double GetStrongBeatPosition(double time)
+        {
+            uint quarterTick = TimeToTick(time);
+            return GetStrongBeatPosition(quarterTick);
+        }
+
+        public double GetWeakBeatPosition(double time)
+        {
+            uint quarterTick = TimeToTick(time);
+            return GetWeakBeatPosition(quarterTick);
+        }
+
+        public double GetDenominatorBeatPosition(double time)
+        {
+            uint quarterTick = TimeToTick(time);
+            return GetDenominatorBeatPosition(quarterTick);
+        }
+
+        public double GetQuarterNotePosition(double time)
+        {
+            uint quarterTick = TimeToTick(time);
+            return GetQuarterNotePosition(quarterTick);
+        }
+
+        public double GetMeasurePosition(double time)
+        {
+            uint quarterTick = TimeToTick(time);
+            return GetMeasurePosition(quarterTick);
         }
     }
 }

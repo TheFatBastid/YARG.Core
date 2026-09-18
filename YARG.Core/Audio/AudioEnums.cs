@@ -11,23 +11,24 @@
         Rhythm,
         Keys,
         Vocals,
-        Vocals1,
-        Vocals2,
-        Drums,
         Drums1,
         Drums2,
         Drums3,
         Drums4,
         Crowd,
-        Preview
+        Preview,
+        VoxSample,
+        Metronome,
+        VenueSample,
     }
 
     public enum SfxSample
     {
         NoteMiss,
         StarPowerAward,
-        StarPowerGain,
+        StarPowerReady,
         StarPowerDeploy,
+        StarPowerDeployCrowd,
         StarPowerRelease,
         Clap,
         StarGain,
@@ -36,6 +37,15 @@
         Overstrum2,
         Overstrum3,
         Overstrum4,
+        CrowdOpen1,
+        CrowdOpen2,
+        CrowdStart,
+        CrowdStart2,
+        CrowdStart3,
+        CrowdEnd1,
+        CrowdEnd2,
+        Chatter,
+        Rewind
     }
 
     public enum DrumSfxSample
@@ -112,6 +122,38 @@
         Vel2Pad7Smp0,
         Vel2Pad7Smp1,
         Vel2Pad7Smp2
+    }
+
+    public enum VoxSample
+    {
+        FullCombo,
+        Times2,
+        Times3,
+        Times4,
+        Times5,
+        Times6,
+        TimesMany,
+        FullBandFullCombo,
+        HighScore,
+        FailSound
+    }
+
+    public enum MetronomeSample
+    {
+        None,
+        Castanet,
+        Clap,
+        Party,
+        Quartz,
+        Sine,
+        Square,
+        Trashcan,
+    }
+
+    public enum MetronomePitch
+    {
+        Hi,
+        Lo,
     }
 
     public enum DSPType

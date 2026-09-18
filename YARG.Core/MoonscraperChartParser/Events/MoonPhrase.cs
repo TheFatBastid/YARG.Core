@@ -19,27 +19,41 @@ namespace MoonscraperChartEditor.Song
             TremoloLane,
             TrillLane,
 
-            // RB Pro Drums
+            BigRockEnding,
+            Coda,
 
+            // RB Pro Drums
             ProDrums_Activation,
+            ProDrums_KickLane,
 
             // Vocals
-
-            Vocals_LyricPhrase,
+            Vocals_ScoringPhrase,
+            Vocals_StaticLyricPhrase,
             Vocals_PercussionPhrase,
             Vocals_RangeShift,
             Vocals_LyricShift,
 
-            // Pro keys
-
+            // Pro Keys
             ProKeys_RangeShift0,
             ProKeys_RangeShift1,
             ProKeys_RangeShift2,
             ProKeys_RangeShift3,
             ProKeys_RangeShift4,
             ProKeys_RangeShift5,
-
             ProKeys_Glissando,
+
+            // Elite Drums
+            EliteDrums_RightCrashLane,
+            EliteDrums_RideLane,
+            EliteDrums_Tom3Lane,
+            EliteDrums_Tom2Lane,
+            EliteDrums_Tom1Lane,
+            EliteDrums_LeftCrashLane,
+            EliteDrums_HiHatLane,
+            EliteDrums_SnareLane,
+            EliteDrums_KickLane,
+            EliteDrums_HatPedalLane,
+            EliteDrums_DiscoFlip,
         }
 
         public uint length;

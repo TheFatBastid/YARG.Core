@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers.Binary;
 using System.Drawing;
 using System.IO;
 
@@ -19,6 +20,7 @@ namespace YARG.Core.Extensions
             {
                 throw new EndOfStreamException("Failed to read GUID, ran out of bytes!");
             }
+
             return new Guid(span);
         }
     }

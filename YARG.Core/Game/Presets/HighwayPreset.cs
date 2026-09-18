@@ -1,4 +1,5 @@
 ﻿using System.Drawing;
+using System.IO;
 using YARG.Core.Game.Settings;
 
 namespace YARG.Core.Game
@@ -26,6 +27,22 @@ namespace YARG.Core.Game
         [SettingType(SettingType.Special)]
         public Color BackgroundGroovePatternColor = Color.FromArgb(255, 44, 73, 158);
 
+        [SettingType(SettingType.Slider)]
+        [SettingRange(0.8f, 1.2f)]
+        public float NoteHeight = 1f;
+
+        [SettingType(SettingType.FileInfo)]
+        public FileInfo? BackgroundImage;
+        [SettingType(SettingType.FileInfo)]
+        public FileInfo? SideImage;
+
+        [SettingType(SettingType.Slider)]
+        [SettingRange(0f, 0.05f)]
+        public float BaseWaviness = 0.01f;
+        [SettingType(SettingType.Slider)]
+        [SettingRange(0f, 0.05f)]
+        public float SideWaviness = 0.01f;
+
         public Color[] BackgroundBaseColors => new[] { BackgroundBaseColor1, BackgroundBaseColor2, BackgroundBaseColor3, BackgroundPatternColor };
         public Color[] BackgroundGrooveBaseColors => new[] { BackgroundGrooveBaseColor1, BackgroundGrooveBaseColor2, BackgroundGrooveBaseColor3, BackgroundGroovePatternColor };
 
@@ -45,8 +62,26 @@ namespace YARG.Core.Game
                 BackgroundGrooveBaseColor1 = BackgroundGrooveBaseColor1,
                 BackgroundGrooveBaseColor2 = BackgroundGrooveBaseColor2,
                 BackgroundGrooveBaseColor3 = BackgroundGrooveBaseColor3,
-                BackgroundGroovePatternColor = BackgroundGroovePatternColor
+                BackgroundGroovePatternColor = BackgroundGroovePatternColor,
+                BackgroundImage = BackgroundImage,
+                SideImage = SideImage,
+                NoteHeight = NoteHeight,
+                BaseWaviness = BaseWaviness,
+                SideWaviness = SideWaviness
             };
+        }
+
+        public string? GetExtraContentFolder()
+        {
+            var baseName = System.IO.Path.GetFileNameWithoutExtension(Path);
+            var directory = System.IO.Path.GetDirectoryName(Path);
+
+            if (baseName == null || directory == null)
+            {
+                return null;
+            }
+
+            return System.IO.Path.Combine(directory, baseName);
         }
     }
 }

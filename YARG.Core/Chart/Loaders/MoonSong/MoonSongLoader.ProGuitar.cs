@@ -8,20 +8,21 @@ namespace YARG.Core.Chart
     {
         public InstrumentTrack<ProGuitarNote> LoadProGuitarTrack(Instrument instrument)
         {
-            if (instrument.ToGameMode() != GameMode.ProGuitar)
+            if (instrument.ToNativeGameMode() != GameMode.ProGuitar)
                 throw new ArgumentException($"Instrument {instrument} is not a Pro guitar instrument!", nameof(instrument));
 
             var difficulties = new Dictionary<Difficulty, InstrumentDifficulty<ProGuitarNote>>()
             {
-                { Difficulty.Easy, LoadDifficulty(instrument, Difficulty.Easy, CreateProGuitarNote) },
-                { Difficulty.Medium, LoadDifficulty(instrument, Difficulty.Medium, CreateProGuitarNote) },
-                { Difficulty.Hard, LoadDifficulty(instrument, Difficulty.Hard, CreateProGuitarNote) },
-                { Difficulty.Expert, LoadDifficulty(instrument, Difficulty.Expert, CreateProGuitarNote) },
+                { Difficulty.Easy, LoadDifficulty<ProGuitarNote>(instrument, Difficulty.Easy, CreateProGuitarNote) },
+                { Difficulty.Medium, LoadDifficulty<ProGuitarNote>(instrument, Difficulty.Medium, CreateProGuitarNote) },
+                { Difficulty.Hard, LoadDifficulty<ProGuitarNote>(instrument, Difficulty.Hard, CreateProGuitarNote) },
+                { Difficulty.Expert, LoadDifficulty<ProGuitarNote>(instrument, Difficulty.Expert, CreateProGuitarNote) },
             };
             return new(instrument, difficulties);
         }
 
-        private ProGuitarNote CreateProGuitarNote(MoonNote moonNote, Dictionary<MoonPhrase.Type, MoonPhrase> currentPhrases)
+        private ProGuitarNote CreateProGuitarNote(MoonNote moonNote, Dictionary<MoonPhrase.Type, MoonPhrase> currentPhrases,
+            List<ProGuitarNote> notes)
         {
             var proString = GetProGuitarString(moonNote);
             int proFret = GetProGuitarFret(moonNote);

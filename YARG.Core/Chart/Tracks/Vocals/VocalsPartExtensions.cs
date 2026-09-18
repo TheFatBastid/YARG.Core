@@ -10,7 +10,7 @@
                 var phraseParent = phrase.PhraseParentNote;
 
                 // Create a new phrase based off of the original one
-                var newPhraseParent = new VocalNote(phraseParent.Flags, phraseParent.Time,
+                var newPhraseParent = new VocalNote(phraseParent.Flags, phraseParent.IsPercussionPhrase, phraseParent.Time,
                     phraseParent.TimeLength, phraseParent.Tick, phraseParent.TickLength);
 
                 foreach (var note in phraseParent.ChildNotes)
@@ -23,7 +23,7 @@
                     // Create an unpitched replacement note. Make sure to use the total lengths instead
                     // of the normal lengths.
                     var newNote = new VocalNote(-1f, note.HarmonyPart, note.Type, note.Time,
-                        note.TotalTimeLength, note.Tick, note.TotalTickLength);
+                        note.TotalTimeLength, note.Tick, note.TotalTickLength, note.IsCensorable);
                     newPhraseParent.AddChildNote(newNote);
                 }
 

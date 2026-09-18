@@ -2,6 +2,7 @@
 using MoonscraperChartEditor.Song;
 using MoonscraperChartEditor.Song.IO;
 using NUnit.Framework;
+using NUnit.Framework.Legacy;
 using YARG.Core.Chart;
 using YARG.Core.Extensions;
 
@@ -28,12 +29,75 @@ namespace YARG.Core.UnitTests.Parsing
     internal class ParseBehaviorTests
     {
         public const uint RESOLUTION = 192;
-        public const float TEMPO = 120;
-        public const int NUMERATOR = 4;
-        public const int DENOMINATOR = 4;
+        public const uint MEASURE_RESOLUTION = RESOLUTION * TimeSignatureChange.MEASURE_RESOLUTION_SCALE;
 
         public static readonly List<MoonText> GlobalEvents = new()
         {
+        };
+
+        public static readonly SyncTrack SyncTrack = new(RESOLUTION)
+        {
+            Tempos =
+            {
+                // The tempo values here are chosen particularly, to avoid round-tripping issues with
+                // .mid storing beats per minute as microseconds per quarter note
+                new TempoChange(60, 0.0, RESOLUTION * 0),
+                new TempoChange(80, 4.0, RESOLUTION * 4),
+                new TempoChange(120, 8.5, RESOLUTION * 10),
+                new TempoChange(160, 12.5, RESOLUTION * 18),
+            },
+            TimeSignatures =
+            {
+                new TimeSignatureChange(4, 4, 0.0, RESOLUTION * 0, MEASURE_RESOLUTION * 0, 0, 0, 0),
+                new TimeSignatureChange(6, 4, 4.0, RESOLUTION * 4, MEASURE_RESOLUTION * 1, 1, 4, 4),
+                new TimeSignatureChange(4, 4, 8.5, RESOLUTION * 10, MEASURE_RESOLUTION * 2, 2, 10, 10),
+                new TimeSignatureChange(7, 8, 10.5, RESOLUTION * 14, MEASURE_RESOLUTION * 3, 3, 14, 14),
+                new TimeSignatureChange(7, 8, 12.25, (uint) (RESOLUTION * 17.5), MEASURE_RESOLUTION * 4, 4, 21, 17.5, interrupted: true),
+                new TimeSignatureChange(4, 2, 12.5, RESOLUTION * 18, MEASURE_RESOLUTION * 5, 5, 22, 18),
+            },
+            Beatlines =
+            {
+                // 4/4
+                new(BeatlineType.Measure, 0.0, RESOLUTION * 0),
+                new(BeatlineType.Strong,  1.0, RESOLUTION * 1),
+                new(BeatlineType.Strong,  2.0, RESOLUTION * 2),
+                new(BeatlineType.Strong,  3.0, RESOLUTION * 3),
+
+                // 6/4
+                new(BeatlineType.Measure, 4.00, RESOLUTION * 4),
+                new(BeatlineType.Strong,  4.75, RESOLUTION * 5),
+                new(BeatlineType.Strong,  5.50, RESOLUTION * 6),
+                new(BeatlineType.Strong,  6.25, RESOLUTION * 7),
+                new(BeatlineType.Strong,  7.00, RESOLUTION * 8),
+                new(BeatlineType.Strong,  7.75, RESOLUTION * 9),
+
+                // 4/4
+                new(BeatlineType.Measure,  8.5, RESOLUTION * 10),
+                new(BeatlineType.Strong,   9.0, RESOLUTION * 11),
+                new(BeatlineType.Strong,   9.5, RESOLUTION * 12),
+                new(BeatlineType.Strong,  10.0, RESOLUTION * 13),
+
+                // 7/8
+                new(BeatlineType.Measure, 10.50, (uint) (RESOLUTION * 14.0)),
+                new(BeatlineType.Weak,    10.75, (uint) (RESOLUTION * 14.5)),
+                new(BeatlineType.Strong,  11.00, (uint) (RESOLUTION * 15.0)),
+                new(BeatlineType.Weak,    11.25, (uint) (RESOLUTION * 15.5)),
+                new(BeatlineType.Strong,  11.50, (uint) (RESOLUTION * 16.0)),
+                new(BeatlineType.Weak,    11.75, (uint) (RESOLUTION * 16.5)),
+                new(BeatlineType.Weak,    12.00, (uint) (RESOLUTION * 17.0)),
+                new(BeatlineType.Measure, 12.25, (uint) (RESOLUTION * 17.5)),
+
+                // 4/2
+                new(BeatlineType.Measure, 12.500, RESOLUTION * 18),
+                new(BeatlineType.Strong,  13.250, RESOLUTION * 20),
+                new(BeatlineType.Strong,  14.000, RESOLUTION * 22),
+                new(BeatlineType.Strong,  14.750, RESOLUTION * 24),
+                new(BeatlineType.Measure, 15.500, RESOLUTION * 26),
+                new(BeatlineType.Strong,  16.250, RESOLUTION * 28),
+                new(BeatlineType.Strong,  17.000, RESOLUTION * 30),
+                new(BeatlineType.Strong,  17.750, RESOLUTION * 32),
+                new(BeatlineType.Measure, 18.500, RESOLUTION * 34),
+            },
         };
 
         private static MoonNote NewNote(int index, int rawNote, float length = 0, Flags flags = Flags.None)
@@ -317,7 +381,8 @@ namespace YARG.Core.UnitTests.Parsing
         public static readonly ParseBehavior VocalsNotes = new(GameMode.Vocals)
         {
             NewSpecial(0, MoonPhrase.Type.Versus_Player1, length: 12),
-            NewSpecial(0, MoonPhrase.Type.Vocals_LyricPhrase, length: 12),
+            NewSpecial(0, MoonPhrase.Type.Vocals_ScoringPhrase, length: 12),
+            NewSpecial(0, MoonPhrase.Type.Vocals_StaticLyricPhrase, length: 12),
             NewNote(0, VOCALS_RANGE_START + 0, length: 0.5f),
             NewNote(1, VOCALS_RANGE_START + 1, length: 0.5f),
             NewNote(2, VOCALS_RANGE_START + 2, length: 0.5f),
@@ -332,7 +397,8 @@ namespace YARG.Core.UnitTests.Parsing
             NewNote(11, VOCALS_RANGE_START + 11, length: 0.5f),
 
             NewSpecial(12, MoonPhrase.Type.Versus_Player2, length: 12),
-            NewSpecial(12, MoonPhrase.Type.Vocals_LyricPhrase, length: 12),
+            NewSpecial(12, MoonPhrase.Type.Vocals_ScoringPhrase, length: 12),
+            NewSpecial(12, MoonPhrase.Type.Vocals_StaticLyricPhrase, length: 12),
             NewSpecial(12, MoonPhrase.Type.Starpower, length: 12),
             NewNote(12, VOCALS_RANGE_START + 12, length: 0.5f),
             NewNote(13, VOCALS_RANGE_START + 13, length: 0.5f),
@@ -349,7 +415,8 @@ namespace YARG.Core.UnitTests.Parsing
 
             NewSpecial(24, MoonPhrase.Type.Versus_Player1, length: 12),
             NewSpecial(24, MoonPhrase.Type.Versus_Player2, length: 12),
-            NewSpecial(24, MoonPhrase.Type.Vocals_LyricPhrase, length: 12),
+            NewSpecial(24, MoonPhrase.Type.Vocals_ScoringPhrase, length: 12),
+            NewSpecial(24, MoonPhrase.Type.Vocals_StaticLyricPhrase, length: 12),
             NewNote(24, VOCALS_RANGE_START + 24, length: 0.5f),
             NewNote(25, VOCALS_RANGE_START + 25, length: 0.5f),
             NewNote(26, VOCALS_RANGE_START + 26, length: 0.5f),
@@ -364,7 +431,8 @@ namespace YARG.Core.UnitTests.Parsing
             NewNote(35, VOCALS_RANGE_START + 35, length: 0.5f),
 
             NewSpecial(36, MoonPhrase.Type.Versus_Player2, length: 13),
-            NewSpecial(36, MoonPhrase.Type.Vocals_LyricPhrase, length: 13),
+            NewSpecial(36, MoonPhrase.Type.Vocals_ScoringPhrase, length: 13),
+            NewSpecial(36, MoonPhrase.Type.Vocals_StaticLyricPhrase, length: 13),
             NewNote(36, VOCALS_RANGE_START + 36, length: 0.5f),
             NewNote(37, VOCALS_RANGE_START + 37, length: 0.5f),
             NewNote(38, VOCALS_RANGE_START + 38, length: 0.5f),
@@ -380,7 +448,8 @@ namespace YARG.Core.UnitTests.Parsing
             NewNote(48, VOCALS_RANGE_START + 48, length: 0.5f),
 
             NewSpecial(49, MoonPhrase.Type.Versus_Player1, length: 1),
-            NewSpecial(49, MoonPhrase.Type.Vocals_LyricPhrase, length: 1),
+            NewSpecial(49, MoonPhrase.Type.Vocals_ScoringPhrase, length: 1),
+            NewSpecial(49, MoonPhrase.Type.Vocals_StaticLyricPhrase, length: 1),
             NewNote(49, 0, flags: Flags.Vocals_Percussion),
         };
 
@@ -464,12 +533,18 @@ namespace YARG.Core.UnitTests.Parsing
 
         public static MoonSong GenerateSong()
         {
+            return GenerateSong(EnumExtensions<MoonInstrument>.Values.Where((instrument) =>
+                CanGenerateSongData(MoonSong.InstrumentToChartGameMode(instrument))));
+        }
+
+        public static MoonSong GenerateSong(IEnumerable<MoonInstrument> instruments)
+        {
             var song = new MoonSong(RESOLUTION);
 
             PopulateSyncTrack(song);
             PopulateGlobalEvents(song);
 
-            foreach (var instrument in EnumExtensions<MoonInstrument>.Values)
+            foreach (var instrument in instruments)
             {
                 var gameMode = MoonSong.InstrumentToChartGameMode(instrument);
                 var track = GameModeToChartData(gameMode);
@@ -481,8 +556,14 @@ namespace YARG.Core.UnitTests.Parsing
 
         public static void PopulateSyncTrack(MoonSong song)
         {
-            song.AddTempo(TEMPO, 0);
-            song.AddTimeSignature(NUMERATOR, DENOMINATOR, 0);
+            song.syncTrack.Tempos.Clear();
+            song.syncTrack.Tempos.AddRange(SyncTrack.Tempos);
+
+            song.syncTrack.TimeSignatures.Clear();
+            song.syncTrack.TimeSignatures.AddRange(SyncTrack.TimeSignatures);
+
+            song.syncTrack.Beatlines.Clear();
+            song.syncTrack.Beatlines.AddRange(SyncTrack.Beatlines);
         }
 
         public static void PopulateGlobalEvents(MoonSong song)
@@ -518,6 +599,42 @@ namespace YARG.Core.UnitTests.Parsing
 
             // ParseBehavior is simply an initialization wrapper, don't return it directly
             return behavior.chart;
+        }
+
+        public static bool CanGenerateSongData(GameMode gameMode)
+        {
+            return gameMode is GameMode.Guitar
+                or GameMode.GHLGuitar
+                or GameMode.ProGuitar
+                or GameMode.Drums
+                or GameMode.Vocals
+                or GameMode.ProKeys;
+        }
+
+        public static void NormalizeHarmonyPhrasesForMidi(MoonSong song)
+        {
+            foreach (var difficulty in EnumExtensions<Difficulty>.Values)
+            {
+                var harm1 = song.GetChart(MoonInstrument.Harmony1, difficulty);
+                var harm2 = song.GetChart(MoonInstrument.Harmony2, difficulty);
+                var harm3 = song.GetChart(MoonInstrument.Harmony3, difficulty);
+
+                var copiedPhrases = (difficulty == Difficulty.Expert ? harm1.specialPhrases : harm2.specialPhrases)
+                    .Where((phrase) => difficulty == Difficulty.Expert
+                        ? phrase.type is MoonPhrase.Type.Vocals_ScoringPhrase or MoonPhrase.Type.Starpower
+                        : phrase.type is MoonPhrase.Type.Starpower)
+                    .Select((phrase) => phrase.Clone())
+                    .ToArray();
+
+                harm2.specialPhrases.Clear();
+                harm3.specialPhrases.Clear();
+
+                foreach (var phrase in copiedPhrases)
+                {
+                    harm2.Insert(phrase.Clone());
+                    harm3.Insert(phrase.Clone());
+                }
+            }
         }
 
         public static void PopulateInstrument(MoonSong song, MoonInstrument instrument, MoonChart track)
@@ -605,18 +722,18 @@ namespace YARG.Core.UnitTests.Parsing
 
         public static void VerifyGlobal(MoonSong sourceSong, MoonSong parsedSong)
         {
-            Assert.Multiple(() =>
+            using (Assert.EnterMultipleScope())
             {
                 Assert.That(parsedSong.resolution, Is.EqualTo(sourceSong.resolution), "Resolution was not parsed correctly!");
 
-                CollectionAssert.AreEqual(sourceSong.events, parsedSong.events, "Global events do not match!");
-                CollectionAssert.AreEqual(sourceSong.sections, parsedSong.sections, "Sections do not match!");
-                CollectionAssert.AreEqual(sourceSong.venue, parsedSong.venue, "Venue events do not match!");
+                Assert.That(parsedSong.events, Is.EqualTo(sourceSong.events).AsCollection, "Global events do not match!");
+                Assert.That(parsedSong.sections, Is.EqualTo(sourceSong.sections).AsCollection, "Sections do not match!");
+                Assert.That(parsedSong.venue, Is.EqualTo(sourceSong.venue).AsCollection, "Venue events do not match!");
 
-                CollectionAssert.AreEqual(sourceSong.syncTrack.Tempos, parsedSong.syncTrack.Tempos, "BPMs do not match!");
-                CollectionAssert.AreEqual(sourceSong.syncTrack.TimeSignatures, parsedSong.syncTrack.TimeSignatures, "Time signatures do not match!");
-                CollectionAssert.AreEqual(sourceSong.syncTrack.Beatlines, parsedSong.syncTrack.Beatlines, "Beatlines do not match!");
-            });
+                Assert.That(parsedSong.syncTrack.Tempos, Is.EqualTo(sourceSong.syncTrack.Tempos).AsCollection, "BPMs do not match!");
+                Assert.That(parsedSong.syncTrack.TimeSignatures, Is.EqualTo(sourceSong.syncTrack.TimeSignatures).AsCollection, "Time signatures do not match!");
+                Assert.That(parsedSong.syncTrack.Beatlines, Is.EqualTo(sourceSong.syncTrack.Beatlines).AsCollection, "Beatlines do not match!");
+            }
         }
 
         public static void VerifyInstrument(MoonSong sourceSong, MoonSong parsedSong, MoonInstrument instrument)
@@ -638,9 +755,9 @@ namespace YARG.Core.UnitTests.Parsing
 
                 var sourceChart = sourceSong.GetChart(instrument, difficulty);
                 var parsedChart = parsedSong.GetChart(instrument, difficulty);
-                CollectionAssert.AreEqual(sourceChart.notes, parsedChart.notes, $"Notes on {difficulty} {instrument} do not match!");
-                CollectionAssert.AreEqual(sourceChart.specialPhrases, parsedChart.specialPhrases, $"Special phrases on {difficulty} {instrument} do not match!");
-                CollectionAssert.AreEqual(sourceChart.events, parsedChart.events, $"Local events on {difficulty} {instrument} do not match!");
+                Assert.That(parsedChart.notes, Is.EqualTo(sourceChart.notes).AsCollection, $"Notes on {difficulty} {instrument} do not match!");
+                Assert.That(parsedChart.specialPhrases, Is.EqualTo(sourceChart.specialPhrases).AsCollection, $"Special phrases on {difficulty} {instrument} do not match!");
+                Assert.That(parsedChart.events, Is.EqualTo(sourceChart.events).AsCollection, $"Local events on {difficulty} {instrument} do not match!");
             });
         }
     }

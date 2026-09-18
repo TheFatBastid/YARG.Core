@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using YARG.Core.Chart;
 using YARG.Core.Input;
 using YARG.Core.Logging;
@@ -134,6 +135,41 @@ namespace YARG.Core.Engine.Guitar
                 return;
             }
 
+            // Prevent overstrum if the current ButtonMask satisfies the active lane
+            var laneMask = GetLaneMask();
+            if (ActiveLaneIncludesNote(laneMask))
+            {
+                UpdateLaneAutohitExpireTime();
+                return;
+            }
+
+            // Prevent overstrum too close to a lane. Unlike the Keys and Drums engines, use the lenient
+            // version which doesn't enforce the correct fretting; the player has the flexibility to adjust
+            // their fretting hand.
+            if (IsInLaneLeniencyWindow())
+            {
+                YargLogger.LogFormatTrace("Overhit prevented by lane end leniency at {0}", CurrentTime);
+                return;
+            }
+
+            // Prevent overstrum during coda
+            if (IsCodaActive)
+            {
+                YargLogger.LogFormatTrace("Overstrum prevented during coda at {0}", CurrentTime);
+                return;
+            }
+
+            if (CodaHasStarted)
+            {
+                YargLogger.LogFormatTrace("Overstrum punished during post-BRE coda section at {0}", CurrentTime);
+                Codas[CurrentCodaIndex].Overhit();
+            }
+
+            if (IsLaneActive)
+            {
+                YargLogger.LogFormatTrace("Punishing lane overstrum at {0}. Current mask: {1}, RequiredLaneNote: {2}, NextTrillNote: {3}", CurrentTime, laneMask, RequiredLaneNote, NextTrillNote);
+            }
+
             YargLogger.LogFormatTrace("Overstrummed at {0}", CurrentTime);
 
             // Break all active sustains
@@ -201,33 +237,39 @@ namespace YARG.Core.Engine.Guitar
 
             note.SetHitState(true, true);
 
+            // Cancel the rest of hit logic during BRE phrase, but still resolve any
+            // previous notes skipped by an out-of-order BRE hit (mirror of the drums
+            // fix) — otherwise NoteIndex strands on the already-hit note and the engine
+            // soft-locks for the rest of the song.
+            // Key on CodaHasStarted, not IsCodaActive (see DrumsEngine.HitNote): a finale charted
+            // exactly on the BRE-end tick is judged (hit/miss) after the coda's EndTime, where
+            // IsCodaActive is already false.
+            if (CodaHasStarted && note.IsBigRockEnding)
+            {
+                SkipPreviousNotes(note);
+                base.HitNote(note);
+                return;
+            }
+
             // Detect if the last note(s) were skipped
             bool skipped = SkipPreviousNotes(note);
 
-            if (note.IsStarPower && note.IsStarPowerEnd)
+            if (note.IsStarPower)
             {
-                AwardStarPower(note);
-                EngineStats.StarPowerPhrasesHit++;
-            }
-
-            if (note.IsSoloStart)
-            {
-                StartSolo();
-            }
-
-            if (IsSoloActive)
-            {
-                Solos[CurrentSoloIndex].NotesHit++;
-            }
-
-            if (note.IsSoloEnd)
-            {
-                EndSolo();
+                if (EngineStats.IsStarPowerActive && EngineParameters.NoStarPowerOverlap)
+                {
+                    StripStarPower(note);
+                }
+                else if (note.IsStarPowerEnd)
+                {
+                    AwardStarPower(note);
+                    EngineStats.StarPowerPhrasesHit++;
+                }
             }
 
             IncrementCombo();
 
-            EngineStats.NotesHit++;
+            EngineStats.IncrementNotesHit(note, CurrentTime);
 
             UpdateMultiplier();
 
@@ -264,34 +306,20 @@ namespace YARG.Core.Engine.Guitar
                 return;
             }
 
+            // BRE notes can't be missed during coda section
+            if (CodaHasStarted && note.IsBigRockEnding)
+            {
+                YargLogger.LogFormatDebug("Tried to miss BRE note at {0}, converting miss to hit", CurrentTime);
+                note.SetHitState(true, true);
+                base.HitNote(note);
+                return;
+            }
+
             note.SetMissState(true, true);
 
             if (note.IsStarPower)
             {
                 StripStarPower(note);
-            }
-
-            // Solo has the start and end flag
-            if(note is { IsSoloStart: true, IsSoloEnd: true })
-            {
-                // While a solo is active, end the current solo and immediately start the next.
-                if (IsSoloActive)
-                {
-                    EndSolo();
-                    StartSolo();
-                }
-                else
-                {
-                    // If no solo is currently active, start and immediately end the solo.
-                    StartSolo();
-                    EndSolo();
-                }
-            } else if(note.IsSoloEnd)
-            {
-                EndSolo();
-            } else if (note.IsSoloStart)
-            {
-                StartSolo();
             }
 
             WasNoteGhosted = false;
@@ -328,6 +356,39 @@ namespace YARG.Core.Engine.Guitar
             }
         }
 
+        protected override bool ActiveLaneIncludesNote(int mask)
+        {
+            if (!IsLaneActive)
+            {
+                return false;
+            }
+
+            if (RequiredLaneNote == WildcardMask)
+            {
+                return true;
+            }
+
+            if (MaskIsMultiFret(RequiredLaneNote)) // Active lane is chord tremolo
+            {
+                if (mask == RequiredLaneNote)
+                {
+                    // All frets held are an exact match
+                    return true;
+                }
+            }
+            else // Active lane is a single fret
+            {
+                var heldMSB = GetMostSignificantBit(mask);
+                if (heldMSB == GetMostSignificantBit(RequiredLaneNote) || (NextTrillNote != -1 && heldMSB == GetMostSignificantBit(NextTrillNote)))
+                {
+                    // The right-most held fret matches the active lane
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
         public override void SetSpeed(double speed)
         {
             base.SetSpeed(speed);
@@ -335,38 +396,51 @@ namespace YARG.Core.Engine.Guitar
             StrumLeniencyTimer.SetSpeed(speed);
         }
 
-        protected sealed override int CalculateBaseScore()
+        protected sealed override (int, int) CalculateChartScores()
         {
-            double score = 0;
+            double baseScore = 0;
+            double noteScore = 0;
             int combo = 0;
             int multiplier;
-            double weight;
             foreach (var note in Notes)
             {
+                // Exclude BRE notes from base score calculation since they can't be scored
+                if (note.IsBigRockEnding)
+                {
+                    continue;
+                }
+
                 // Get the current multiplier given the current combo
                 multiplier = Math.Min((combo / 10) + 1, BaseParameters.MaxMultiplier);
+                double pointsForNote = POINTS_PER_NOTE * (1 + note.ChildNotes.Count);
+                baseScore += multiplier * pointsForNote;
+                noteScore += pointsForNote;
 
-                // invert it to calculate leniency
-                weight = 1.0 * multiplier / BaseParameters.MaxMultiplier;
-
-                score += weight * (POINTS_PER_NOTE * (1 + note.ChildNotes.Count));
-                score += weight * Math.Ceiling(note.TickLength / TicksPerSustainPoint);
+                double pointsForSustain = Math.Ceiling(note.TickLength / TicksPerSustainPoint);
+                baseScore += multiplier * pointsForSustain;
+                noteScore += pointsForSustain;
                 combo++;
                 // If a note is disjoint, each sustain is counted separately.
                 if (note.IsDisjoint)
                 {
+                    HashSet<uint> seenNoteTicks = new();
                     foreach (var child in note.ChildNotes)
                     {
-                        score += Math.Ceiling(child.TickLength / TicksPerSustainPoint);
-
-                        //TODO: Check if disjoint notes should increase combo
-                        combo++;
+                        double pointsForDisjoint = Math.Ceiling(child.TickLength / TicksPerSustainPoint);
+                        baseScore += multiplier * pointsForDisjoint;
+                        noteScore += pointsForDisjoint;
+                        // Only increment combo if we haven't already seen a note in that tick
+                        if (!seenNoteTicks.Contains(child.Tick))
+                        {
+                            combo++;
+                            seenNoteTicks.Add(child.Tick);
+                        }
                     }
                 }
             }
 
-            YargLogger.LogDebug($"[Vocals] Base score: {score}, Max Combo: {combo}");
-            return (int) Math.Round(score);
+            YargLogger.LogDebug($"[Guitar] Base score: {baseScore}, Max Combo: {combo}");
+            return ((int) Math.Round(baseScore), (int) Math.Round(noteScore));
         }
 
         protected void ToggleFret(int fret, bool active)
@@ -394,6 +468,49 @@ namespace YARG.Core.Engine.Guitar
             return (EffectiveButtonMask & (1 << (int) fret)) != 0;
         }
 
+        protected int GetLaneMask()
+        {
+            var laneMask = EffectiveButtonMask;
+
+            foreach(var sustain in ActiveSustains)
+            {
+                // Remove any frets from disjointed sustains
+                laneMask &= (byte) ~sustain.Note.NoteMask;
+            }
+
+            if ((RequiredLaneNote & OPEN_MASK) != 0 && MaskIsMultiFret(RequiredLaneNote))
+            {
+                // Active tremolo lane is an open chord, add open note to the final mask
+                laneMask |= OPEN_MASK;
+            }
+
+            return laneMask;
+        }
+
+        // Parameterless version of the same method found in BaseEngine.Generic, which only cares about proximity to any lane, not the
+        // contents of the lane. Used by Guitar engines to allow for fretting flexibility during transitions
+        private bool IsInLaneLeniencyWindow()
+        {
+            if (IsLaneActive)
+            {
+                return false;
+            }
+
+            if (
+                NoteIndex < Notes.Count && // There is a next note
+                Notes[NoteIndex].IsLaneStart && // That note is a lane start
+                Notes[NoteIndex].Time - CurrentTime < EngineParameters.HitWindow.LaneProximityProtectionWindow // That lane is starting soon
+            )
+            {
+                return true;
+            }
+
+            return (
+                NoteIndex > 0 && // There is a previous note
+                Notes[NoteIndex - 1].IsLaneEnd && // That note was a lane end
+                CurrentTime - Notes[NoteIndex - 1].Time < EngineParameters.HitWindow.LaneProximityProtectionWindow // That lane ended recently
+            );
+        }
         protected static bool IsFretInput(GameInput input)
         {
             return input.GetAction<GuitarAction>() switch
@@ -421,6 +538,12 @@ namespace YARG.Core.Engine.Guitar
                     GuitarAction.StrumDown => true,
                 _ => false,
             };
+        }
+
+        protected override bool ProximalLaneForgivesInput(int inputNote, GuitarNote laneNote)
+        {
+            // The guitar engine doesn't require accurate fretting for lane proximity leniency
+            return true;
         }
     }
 }

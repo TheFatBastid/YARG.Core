@@ -32,6 +32,7 @@ namespace YARG.Core.UnitTests.Parsing
             { MoonInstrument.Rhythm,       RHYTHM_TRACK },
             { MoonInstrument.Keys,         KEYS_TRACK },
             { MoonInstrument.Drums,        DRUMS_TRACK },
+            { MoonInstrument.EliteDrums,   ELITE_DRUMS_TRACK },
 
             { MoonInstrument.GHLiveGuitar, GHL_GUITAR_TRACK },
             { MoonInstrument.GHLiveBass,   GHL_BASS_TRACK },
@@ -246,6 +247,12 @@ namespace YARG.Core.UnitTests.Parsing
             { GameMode.ProKeys,   ProKeysNoteOffsetLookup },
         };
 
+        private static readonly MoonInstrument[] SupportedInstruments = InstrumentToNameLookup.Keys
+            .Concat(InstrumentDifficultyToNameLookupLookup.Keys)
+            .Where((instrument) => InstrumentNoteOffsetLookup.ContainsKey(MoonSong.InstrumentToChartGameMode(instrument)))
+            .Distinct()
+            .ToArray();
+
         private static readonly Dictionary<GameMode, Dictionary<MoonNoteType, int>> InstrumentForceOffsetLookup = new()
         {
             { GameMode.Guitar,    GuitarForceOffsetLookup },
@@ -289,7 +296,7 @@ namespace YARG.Core.UnitTests.Parsing
 
 #pragma warning restore IDE0230
 
-        // Because SevenBitNumber andFourBitNumber have no implicit operators for taking in bytes
+        // Because SevenBitNumber and FourBitNumber have no implicit operators for taking in bytes
         private static SevenBitNumber S(byte number) => (SevenBitNumber) number;
         private static FourBitNumber F(byte number) => (FourBitNumber) number;
 
@@ -297,18 +304,60 @@ namespace YARG.Core.UnitTests.Parsing
         {
             var timedEvents = new MidiEventList();
 
-            foreach (var bpm in sourceSong.syncTrack.Tempos)
+            var syncTrack = sourceSong.syncTrack;
+
+            foreach (var bpm in syncTrack.Tempos)
             {
-                long microseconds = TempoChange.BpmToMicroSeconds(bpm.BeatsPerMinute);
-                timedEvents.Add((bpm.Tick, new SetTempoEvent(microseconds)));
+                timedEvents.Add((bpm.Tick, new SetTempoEvent(bpm.MicroSecondsPerBeat)));
             }
 
-            foreach (var ts in sourceSong.syncTrack.TimeSignatures)
+            for (int i = 0; i < syncTrack.TimeSignatures.Count; i++)
             {
+                var ts = syncTrack.TimeSignatures[i];
+                if (ts.IsInterrupted)
+                {
+                    if (i == 0)
+                    {
+                        Assert.Fail($"Invalid interrupted time signature <{ts}>");
+                        return null!;
+                    }
+
+                    var prevTs = syncTrack.TimeSignatures[i - 1];
+                    Assert.Multiple(() =>
+                    {
+                        Assert.That(ts.Numerator, Is.EqualTo(prevTs.Numerator), "Interrupted time signatures must match the previous time signature");
+                        Assert.That(ts.Denominator, Is.EqualTo(prevTs.Denominator), "Interrupted time signatures must match the previous time signature");
+                    });
+                    continue;
+                }
+
                 timedEvents.Add((ts.Tick, new TimeSignatureEvent((byte) ts.Numerator, (byte) ts.Denominator)));
             }
 
             return FinalizeTrackChunk("TEMPO_TRACK", timedEvents);
+        }
+
+        private static TrackChunk GenerateBeatChunk(MoonSong sourceSong)
+        {
+            var timedEvents = new MidiEventList();
+
+            var syncTrack = sourceSong.syncTrack;
+
+            foreach (var beatline in syncTrack.Beatlines)
+            {
+                var note = beatline.Type switch
+                {
+                    BeatlineType.Measure => S(12),
+                    BeatlineType.Strong => S(13),
+                    BeatlineType.Weak => S(14),
+                    _ => throw new Exception($"Unhandled beatline type {beatline.Type}"),
+                };
+
+                timedEvents.Add((beatline.Tick, new NoteOnEvent() { NoteNumber = note, Velocity = S(VELOCITY) }));
+                timedEvents.Add((beatline.Tick + 1, new NoteOffEvent() { NoteNumber = note, Velocity = S(0) }));
+            }
+
+            return FinalizeTrackChunk("BEAT", timedEvents);
         }
 
         private static TrackChunk GenerateEventsChunk(MoonSong sourceSong)
@@ -592,6 +641,7 @@ namespace YARG.Core.UnitTests.Parsing
         {
             var midi = new MidiFile(
                 GenerateSyncChunk(sourceSong),
+                GenerateBeatChunk(sourceSong),
                 GenerateEventsChunk(sourceSong)
             )
             {
@@ -623,7 +673,8 @@ namespace YARG.Core.UnitTests.Parsing
         {
             YargLogger.AddLogListener(new DebugYargLogListener());
 
-            var sourceSong = GenerateSong();
+            var sourceSong = GenerateSong(SupportedInstruments);
+            NormalizeHarmonyPhrasesForMidi(sourceSong);
             var midi = GenerateMidi(sourceSong);
             MoonSong parsedSong;
             try
@@ -640,7 +691,7 @@ namespace YARG.Core.UnitTests.Parsing
             var vocalsChart = sourceSong.GetChart(MoonInstrument.Vocals, Difficulty.Expert);
             foreach (var phrase in vocalsChart.specialPhrases)
             {
-                if (phrase.type == MoonPhrase.Type.Vocals_LyricPhrase)
+                if (phrase.type == MoonPhrase.Type.Vocals_ScoringPhrase)
                 {
                     sourceSong.InsertText(new MoonText(TextEvents.LYRIC_PHRASE_START, phrase.tick));
                     sourceSong.InsertText(new MoonText(TextEvents.LYRIC_PHRASE_END, phrase.tick + phrase.length));

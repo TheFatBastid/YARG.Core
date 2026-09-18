@@ -1,4 +1,6 @@
 ﻿using System;
+using System.Collections.Generic;
+using System.Linq;
 using YARG.Core.Chart;
 using YARG.Core.Input;
 using YARG.Core.Logging;
@@ -88,6 +90,7 @@ namespace YARG.Core.Engine.Vocals.Engines
             if (CurrentTick > phrase.TickEnd)
             {
                 bool hasNotes = PhraseTicksTotal.Value != 0;
+                bool isLastPhrase = NoteIndex == Notes.Count - 1;
 
                 var percentHit = PhraseTicksHit / PhraseTicksTotal.Value;
                 if (!hasNotes)
@@ -116,8 +119,10 @@ namespace YARG.Core.Engine.Vocals.Engines
 
                 if (hasNotes)
                 {
-                    OnPhraseHit?.Invoke(percentHit / EngineParameters.PhraseHitPercent, hit);
+                    OnPhraseHit?.Invoke(percentHit / EngineParameters.PhraseHitPercent, hit, isLastPhrase);
                 }
+
+                UpdateCarriedNote(phrase);
             }
         }
 
@@ -267,5 +272,7 @@ namespace YARG.Core.Engine.Vocals.Engines
         }
 
         protected override bool CanNoteBeHit(VocalNote note) => throw new NotImplementedException();
+
+        protected override bool ProximalLaneForgivesInput(int inputNote, VocalNote laneNote) => throw new NotImplementedException();
     }
 }

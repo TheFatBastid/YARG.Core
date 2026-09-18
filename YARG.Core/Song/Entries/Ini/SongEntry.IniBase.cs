@@ -1,18 +1,20 @@
-using MoonscraperChartEditor.Song.IO;
+﻿using MoonscraperChartEditor.Song.IO;
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Linq;
 using YARG.Core.Chart;
+using YARG.Core.Chart.Loaders.UltraStar;
 using YARG.Core.Extensions;
 using YARG.Core.IO;
 using YARG.Core.IO.Ini;
-using YARG.Core.Song.Cache;
+using YARG.Core.Logging;
 
 namespace YARG.Core.Song
 {
     public static class IniAudio
     {
+        public static readonly string[] SupportedCleanStems = { "song_clean", "vocals_clean", "vocals_1_clean", "vocals_2_clean", "crowd_clean" };
+        public static readonly string[] SupportedExplicitStems = { "vocals_explicit", "vocals_1_explicit", "vocals_2_explicit", "crowd_explicit" };
         public static readonly string[] SupportedStems = { "song", "guitar", "bass", "rhythm", "keys", "vocals", "vocals_1", "vocals_2", "drums", "drums_1", "drums_2", "drums_3", "drums_4", "crowd", };
         public static readonly string[] SupportedFormats = { ".opus", ".ogg", ".mp3", ".wav", ".aiff", };
         private static readonly HashSet<string> SupportedAudioFiles = new();
@@ -21,7 +23,9 @@ namespace YARG.Core.Song
         {
             foreach (string stem in SupportedStems)
                 foreach (string format in SupportedFormats)
-                    SupportedAudioFiles.Add(stem + format);
+            {
+                SupportedAudioFiles.Add(stem + format);
+            }
         }
 
         public static bool IsAudioFile(string file)
@@ -37,11 +41,12 @@ namespace YARG.Core.Song
             ("notes.mid"  , ChartFormat.Mid),
             ("notes.midi" , ChartFormat.Midi),
             ("notes.chart", ChartFormat.Chart),
+            ("notes.txt"  , ChartFormat.UltraStar),
         };
 
         protected static readonly string[] ALBUMART_FILES;
         protected static readonly string[] PREVIEW_FILES;
-
+        protected static readonly string[] CLEAN_PREVIEW_FILES;
         static IniSubEntry()
         {
             ALBUMART_FILES = new string[IMAGE_EXTENSIONS.Length];
@@ -54,6 +59,12 @@ namespace YARG.Core.Song
             for (int i = 0; i < PREVIEW_FILES.Length; i++)
             {
                 PREVIEW_FILES[i] = "preview" + IniAudio.SupportedFormats[i];
+            }
+
+            CLEAN_PREVIEW_FILES = new string[IniAudio.SupportedFormats.Length];
+            for (int i = 0; i < PREVIEW_FILES.Length; i++)
+            {
+                CLEAN_PREVIEW_FILES[i] = "preview_clean" + IniAudio.SupportedFormats[i];
             }
         }
 
@@ -81,6 +92,7 @@ namespace YARG.Core.Song
         public override SongChart? LoadChart()
         {
             using var data = GetChartData(CHART_FILE_TYPES[(int) _chartFormat].Filename);
+
             if (data == null)
             {
                 return null;
@@ -91,9 +103,15 @@ namespace YARG.Core.Song
                 HopoThreshold = _settings.HopoThreshold,
                 SustainCutoffThreshold = _settings.SustainCutoffThreshold,
                 StarPowerNote = _settings.OverdiveMidiNote,
+                TuningOffsetCents = _settings.TuningOffsetCents,
                 DrumsType = ParseDrumsType(in _parts),
                 ChordHopoCancellation = _chartFormat != ChartFormat.Chart
             };
+
+            if (_chartFormat == ChartFormat.UltraStar)
+            {
+                return SongChart.FromUltraStarBytes(in parseSettings, data.ReadOnlySpan);
+            }
 
             using var stream = data.ToReferenceStream();
             if (_chartFormat == ChartFormat.Mid || _chartFormat == ChartFormat.Midi)
@@ -106,6 +124,11 @@ namespace YARG.Core.Song
         }
 
         public override FixedArray<byte>? LoadMiloData()
+        {
+            return null;
+        }
+
+        public override FixedArray<byte>? LoadVocData()
         {
             return null;
         }
@@ -128,10 +151,15 @@ namespace YARG.Core.Song
 
         protected internal static ScanResult ScanChart(IniSubEntry entry, FixedArray<byte> file, IniModifierCollection modifiers)
         {
-            var drums_type = DrumsType.Any;
+            var drums_type = DrumsType.FourOrFive;
             if (modifiers.Extract("five_lane_drums", out bool fiveLaneDrums))
             {
-                drums_type = fiveLaneDrums ? DrumsType.FiveLane : DrumsType.FourOrPro;
+                drums_type = fiveLaneDrums ? DrumsType.FiveLane : DrumsType.FourLane;
+            }
+
+            if (entry._chartFormat == ChartFormat.UltraStar)
+            {
+                return ScanUltraStar(entry, file);
             }
 
             ScanExpected<long> resolution;
@@ -184,6 +212,11 @@ namespace YARG.Core.Song
             (entry._parsedYear, entry._yearAsNumber) = ParseYear(entry._metadata.Year);
             entry._hash = HashWrapper.Hash(file.ReadOnlySpan);
             entry.SetSortStrings();
+
+            if (modifiers.Extract("tuning_offset_cents", out short tuningOffsetCents))
+            {
+                entry._settings.TuningOffsetCents = tuningOffsetCents;
+            }
 
             if (!modifiers.Extract("hopo_frequency", out entry._settings.HopoThreshold) || entry._settings.HopoThreshold <= 0)
             {
@@ -252,7 +285,7 @@ namespace YARG.Core.Song
 
             if (entry._metadata.SongLength <= 0)
             {
-                using var mixer = entry.LoadAudio(0, 0);
+                using var mixer = entry.LoadAudio(0, 0, false);
                 if (mixer != null)
                 {
                     entry._metadata.SongLength = (long) (mixer.Length * SongMetadata.MILLISECOND_FACTOR);
@@ -261,12 +294,19 @@ namespace YARG.Core.Song
             return ScanResult.Success;
         }
 
-        protected static bool TryGetRandomBackgroundImage<TValue>(Dictionary<string, TValue> dict, out TValue? value)
+        protected static bool TryGetRandomBackgroundImage<TValue>(Dictionary<string, TValue> dict, bool enableCensoring, out TValue? value)
         {
+            var censorSuffix = enableCensoring ? CLEAN_BACKGROUND_SUFFIX : EXPLICIT_BACKGROUND_SUFFIX;
             // Choose a valid image background present in the folder at random
             List<TValue>? images = null;
+            List<TValue>? censoredImages = null;
             foreach (var format in IMAGE_EXTENSIONS)
             {
+                if (dict.TryGetValue("bg" + censorSuffix + format, out var censoredImage))
+                {
+                    censoredImages ??= new List<TValue>();
+                    censoredImages.Add(censoredImage);
+                }
                 if (dict.TryGetValue("bg" + format, out var image))
                 {
                     images ??= new List<TValue>();
@@ -285,20 +325,35 @@ namespace YARG.Core.Song
                 {
                     if (shortname.EndsWith(format))
                     {
-                        images ??= new List<TValue>();
-                        images.Add(image);
+                        if (shortname.EndsWith(censorSuffix + format))
+                        {
+                            censoredImages ??= new List<TValue>();
+                            censoredImages.Add(image);
+                        }
+                        else
+                        {
+                            images ??= new List<TValue>();
+                            images.Add(image);
+                        }
                         break;
                     }
                 }
             }
 
-            if (images == null)
+            if (censoredImages != null)
             {
-                value = default!;
-                return false;
+                value = censoredImages[BACKROUND_RNG.Next(censoredImages.Count)];
+                return true;
             }
-            value = images[BACKROUND_RNG.Next(images.Count)];
-            return true;
+
+            if (images != null)
+            {
+                value = images[BACKROUND_RNG.Next(images.Count)];
+                return true;
+            }
+
+            value = default!;
+            return false;
         }
 
         protected static DrumsType ParseDrumsType(in AvailableParts parts)
@@ -317,19 +372,10 @@ namespace YARG.Core.Song
         private static ScanExpected<long> ParseDotChart<TChar>(ref YARGTextContainer<TChar> container, IniModifierCollection modifiers, ref AvailableParts parts, ref DrumsType drumsType)
             where TChar : unmanaged, IEquatable<TChar>, IConvertible
         {
-            if (drumsType != DrumsType.FiveLane && modifiers.Extract("pro_drums", out bool proDrums))
+            if (drumsType != DrumsType.FiveLane && modifiers.Extract("pro_drums", out bool proDrums) && proDrums)
             {
-                // We don't want to just immediately set the value to one of the other
-                // on the chance that we still need to test for FiveLane.
-                // We just know what the .ini explicitly tells us it *isn't*
-                if (proDrums)
-                {
-                    drumsType -= DrumsType.FourLane;
-                }
-                else
-                {
-                    drumsType -= DrumsType.ProDrums;
-                }
+                drumsType |= DrumsType.ProDrums;
+                drumsType &= ~DrumsType.FourLane;
             }
 
             long resolution = 192;
@@ -359,23 +405,11 @@ namespace YARG.Core.Song
 
         private static ScanExpected<long> ParseDotMidi(FixedArray<byte> file, IniModifierCollection modifiers, ref AvailableParts parts, ref DrumsType drumsType)
         {
-            if (drumsType != DrumsType.FiveLane)
+            if (drumsType != DrumsType.FiveLane && (!modifiers.Extract("pro_drums", out bool proDrums) || proDrums))
             {
-                // We don't want to just immediately set the value to one of the other
-                // on the chance that we still need to test for FiveLane.
-                // We just know what the .ini explicitly tells us it *isn't*.
-                //
-                // That being said, .chart differs in that FourLane is the default state.
-                // .mid's default is ProDrums, which is why we account for when the .ini does
-                // not contain the flag.
-                if (!modifiers.Extract("pro_drums", out bool proDrums) || proDrums)
-                {
-                    drumsType -= DrumsType.FourLane;
-                }
-                else
-                {
-                    drumsType -= DrumsType.ProDrums;
-                }
+                // .mid's default state when the value isn't provided is ProDrums, differing with .chart
+                drumsType |= DrumsType.ProDrums;
+                drumsType &= ~DrumsType.FourLane;
             }
             return ParseMidi(file, ref parts, ref drumsType);
         }
@@ -485,9 +519,9 @@ namespace YARG.Core.Song
                 {
                     uint lane = YARGChartFileReader.ExtractWithWhitespace<TChar, uint>(ref container);
                     ulong _ = YARGChartFileReader.Extract<TChar, ulong>(ref container);
-                    if (0 <= lane && lane <= 4)
+                    if (lane <= 4)
                     {
-                        part.Difficulties |= diff_mask;
+                        part.ActivateDifficulty(difficulty);
                     }
                     else if (lane == 5)
                     {
@@ -495,12 +529,12 @@ namespace YARG.Core.Song
                         if (drumsType >= DrumsType.FiveLane)
                         {
                             drumsType = DrumsType.FiveLane;
-                            part.Difficulties |= diff_mask;
+                            part.ActivateDifficulty(difficulty);
                         }
                     }
                     else if (YELLOW_CYMBAL <= lane && lane <= GREEN_CYMBAL)
                     {
-                        if ((drumsType & DrumsType.ProDrums) == DrumsType.ProDrums)
+                        if (drumsType != DrumsType.FiveLane)
                         {
                             drumsType = DrumsType.ProDrums;
                         }
@@ -509,18 +543,89 @@ namespace YARG.Core.Song
                     {
                         if (difficulty == Difficulty.Expert)
                         {
-                            part.Difficulties |= DifficultyMask.ExpertPlus;
+                            part.ActivateDifficulty(Difficulty.ExpertPlus);
                         }
                     }
 
                     //  Testing against zero would not work in expert
-                    if ((part.Difficulties & requiredMask) == requiredMask && (drumsType == DrumsType.FourLane || drumsType == DrumsType.ProDrums || drumsType == DrumsType.FiveLane))
+                    if ((part.Difficulties & requiredMask) == requiredMask && drumsType is DrumsType.ProDrums or DrumsType.FiveLane)
                     {
                         return false;
                     }
                 }
             }
             return true;
+        }
+
+        private static ScanResult ScanUltraStar(IniSubEntry entry, FixedArray<byte> file)
+        {
+            var loader = new UltraStarLoader(file);
+
+            string? title = loader.GetMetadata("TITLE");
+            if (string.IsNullOrWhiteSpace(title))
+            {
+                return ScanResult.NoName;
+            }
+
+            entry._metadata = SongMetadata.Default;
+
+            entry._metadata.Name = title!; // We will have returned already if title is null
+            entry._metadata.Artist = loader.GetMetadata("ARTIST") ?? SongMetadata.DEFAULT_ARTIST;
+            entry._metadata.Album = loader.GetMetadata("ALBUM") ?? SongMetadata.DEFAULT_ALBUM;
+            entry._metadata.Genre = loader.GetMetadata("GENRE") ?? string.Empty;
+            entry._metadata.Year = loader.GetMetadata("YEAR") ?? SongMetadata.DEFAULT_YEAR;
+            entry._metadata.Charter = loader.GetMetadata("CREATOR") ?? SongMetadata.DEFAULT_CHARTER;
+
+            if (loader.GetMetadata("GAP") is string gapStr &&
+                double.TryParse(gapStr,
+                    System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    out double gapMs))
+            {
+                entry._metadata.SongOffset = 0;
+            }
+
+            if (loader.GetMetadata("PREVIEWSTART") is string previewStr &&
+                double.TryParse(previewStr,
+                    System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    out double previewMs))
+            {
+                entry._metadata.Preview.Start = (long) previewMs;
+            }
+
+            entry._parts.LeadVocals.Difficulties = DifficultyMask.None;
+            entry._parts.HarmonyVocals.Difficulties = DifficultyMask.None;
+
+            entry._parts.LeadVocals.SubTracks = 1;
+            entry._parts.LeadVocals.ActivateDifficulty(Difficulty.Expert);
+            entry._parts.LeadVocals.Intensity = 0;
+
+            if (loader.GetMetadata("PARTS") == "2")
+            {
+                entry._parts.HarmonyVocals.SubTracks = 2;
+                entry._parts.HarmonyVocals.Intensity = 0;
+                entry._parts.HarmonyVocals.ActivateDifficulty(Difficulty.Expert);
+            }
+            else
+            {
+                entry._parts.HarmonyVocals.SubTracks = 0;
+            }
+
+            entry._hash = HashWrapper.Hash(file.ReadOnlySpan);
+            (entry._parsedYear, entry._yearAsNumber) = ParseYear(entry._metadata.Year);
+            entry.SetSortStrings();
+
+            if (entry._metadata.SongLength <= 0)
+            {
+                using var mixer = entry.LoadAudio(0, 0, false);
+                if (mixer != null)
+                {
+                    entry._metadata.SongLength = (long) (mixer.Length * SongMetadata.MILLISECOND_FACTOR);
+                }
+            }
+
+            return ScanResult.Success;
         }
 
         private static void SetIntensities(IniModifierCollection modifiers, ref AvailableParts parts)
@@ -594,6 +699,26 @@ namespace YARG.Core.Song
                 if (parts.FourLaneDrums.Intensity == -1)
                 {
                     parts.FourLaneDrums.Intensity = parts.ProDrums.Intensity;
+                }
+            }
+
+            if (modifiers.Extract("diff_elite_drums", out intensity) && intensity != -1)
+            {
+                parts.EliteDrums.Intensity = (sbyte) intensity;
+
+                if (parts.ProDrums.Intensity == -1)
+                {
+                    parts.ProDrums.Intensity = (sbyte) intensity;
+                }
+
+                if (parts.FourLaneDrums.Intensity == -1)
+                {
+                    parts.FourLaneDrums.Intensity = (sbyte) intensity;
+                }
+
+                if (parts.FiveLaneDrums.Intensity == -1)
+                {
+                    parts.FiveLaneDrums.Intensity = (sbyte) intensity;
                 }
             }
 

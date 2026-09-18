@@ -1,7 +1,8 @@
-using System.Drawing;
+﻿using System.Drawing;
 using System.IO;
 using YARG.Core.Chart;
 using YARG.Core.Extensions;
+using YARG.Core.Game.Settings;
 using YARG.Core.Utility;
 
 namespace YARG.Core.Game
@@ -10,6 +11,20 @@ namespace YARG.Core.Game
     {
         public class FiveFretGuitarColors : IFretColorProvider, IBinarySerializable
         {
+            #region Note Appearance
+
+            /// <summary>
+            /// Emission intensity for the center strip of tap notes, as a
+            /// percentage (0–100). At 0 the strip appears dark (no emission
+            /// glow); at 100 it has full emission. Internally normalized to
+            /// 0.0–1.0 when applied as a material emission multiplier.
+            /// </summary>
+            [SettingType(SettingType.Slider)]
+            [SettingRange(0f, 100f)]
+            public float TapStripEmission = 0f;
+
+            #endregion
+
             #region Frets
 
             public Color OpenFret   = DefaultPurple;
@@ -27,11 +42,11 @@ namespace YARG.Core.Game
             {
                 return index switch
                 {
-                    1 => GreenFret,
-                    2 => RedFret,
-                    3 => YellowFret,
-                    4 => BlueFret,
-                    5 => OrangeFret,
+                    (int) FiveFretGuitarFret.Green => GreenFret,
+                    (int) FiveFretGuitarFret.Red => RedFret,
+                    (int) FiveFretGuitarFret.Yellow => YellowFret,
+                    (int) FiveFretGuitarFret.Blue => BlueFret,
+                    (int) FiveFretGuitarFret.Orange => OrangeFret,
                     (int) FiveFretGuitarFret.Open => OpenFret,
                     _ => default
                 };
@@ -52,12 +67,12 @@ namespace YARG.Core.Game
             {
                 return index switch
                 {
-                    0 => OpenFretInner,
-                    1 => GreenFretInner,
-                    2 => RedFretInner,
-                    3 => YellowFretInner,
-                    4 => BlueFretInner,
-                    5 => OrangeFretInner,
+                    (int) FiveFretGuitarFret.Green => GreenFretInner,
+                    (int) FiveFretGuitarFret.Red => RedFretInner,
+                    (int) FiveFretGuitarFret.Yellow => YellowFretInner,
+                    (int) FiveFretGuitarFret.Blue => BlueFretInner,
+                    (int) FiveFretGuitarFret.Orange => OrangeFretInner,
+                    (int) FiveFretGuitarFret.Open => OpenFretInner,
                     _ => default
                 };
             }
@@ -77,12 +92,12 @@ namespace YARG.Core.Game
             {
                 return index switch
                 {
-                    0 => OpenParticles,
-                    1 => GreenParticles,
-                    2 => RedParticles,
-                    3 => YellowParticles,
-                    4 => BlueParticles,
-                    5 => OrangeParticles,
+                    (int) FiveFretGuitarFret.Green => GreenParticles,
+                    (int) FiveFretGuitarFret.Red => RedParticles,
+                    (int) FiveFretGuitarFret.Yellow => YellowParticles,
+                    (int) FiveFretGuitarFret.Blue => BlueParticles,
+                    (int) FiveFretGuitarFret.Orange => OrangeParticles,
+                    (int) FiveFretGuitarFret.Open => OpenParticles,
                     _ => default
                 };
             }
@@ -91,12 +106,12 @@ namespace YARG.Core.Game
 
             #region Notes
 
-            public Color OpenNote   = DefaultPurple;
-            public Color GreenNote  = DefaultGreen;
-            public Color RedNote    = DefaultRed;
-            public Color YellowNote = DefaultYellow;
-            public Color BlueNote   = DefaultBlue;
-            public Color OrangeNote = DefaultOrange;
+            public Color OpenNote     = DefaultPurple;
+            public Color GreenNote    = DefaultGreen;
+            public Color RedNote      = DefaultRed;
+            public Color YellowNote   = DefaultYellow;
+            public Color BlueNote     = DefaultBlue;
+            public Color OrangeNote   = DefaultOrange;
 
             /// <summary>
             /// Gets the note color for a specific note index.
@@ -106,22 +121,31 @@ namespace YARG.Core.Game
             {
                 return index switch
                 {
-                    1 => GreenNote,
-                    2 => RedNote,
-                    3 => YellowNote,
-                    4 => BlueNote,
-                    5 => OrangeNote,
+                    (int) FiveFretGuitarFret.Green => GreenNote,
+                    (int) FiveFretGuitarFret.Red => RedNote,
+                    (int) FiveFretGuitarFret.Yellow => YellowNote,
+                    (int) FiveFretGuitarFret.Blue => BlueNote,
+                    (int) FiveFretGuitarFret.Orange => OrangeNote,
+                    (int) FiveFretGuitarFret.Wildcard => DefaultWildcard,
                     (int) FiveFretGuitarFret.Open => OpenNote,
                     _ => default
                 };
             }
 
-            public Color OpenNoteStarPower   = DefaultStarpower;
-            public Color GreenNoteStarPower  = DefaultStarpower;
-            public Color RedNoteStarPower    = DefaultStarpower;
-            public Color YellowNoteStarPower = DefaultStarpower;
-            public Color BlueNoteStarPower   = DefaultStarpower;
-            public Color OrangeNoteStarPower = DefaultStarpower;
+            public Color OpenNoteStarPower     = DefaultStarpower;
+            public Color GreenNoteStarPower    = DefaultStarpower;
+            public Color RedNoteStarPower      = DefaultStarpower;
+            public Color YellowNoteStarPower   = DefaultStarpower;
+            public Color BlueNoteStarPower     = DefaultStarpower;
+            public Color OrangeNoteStarPower   = DefaultStarpower;
+
+            // Open HOPO notes have EmissionAddition: 1 on their model material,
+            // which washes any color to white. The dedicated field lets users
+            // control this independently; ResetEmissionAddition in NoteGroup
+            // nullifies the addition so the color is visible. Default is white
+            // to match the existing appearance.
+            public Color OpenHopoNote          = DefaultStarpower;
+            public Color OpenHopoNoteStarPower = DefaultStarpower;
 
             /// <summary>
             /// Gets the Star Power note color for a specific note index.
@@ -131,15 +155,34 @@ namespace YARG.Core.Game
             {
                 return index switch
                 {
-                    1 => GreenNoteStarPower,
-                    2 => RedNoteStarPower,
-                    3 => YellowNoteStarPower,
-                    4 => BlueNoteStarPower,
-                    5 => OrangeNoteStarPower,
+                    (int) FiveFretGuitarFret.Green => GreenNoteStarPower,
+                    (int) FiveFretGuitarFret.Red => RedNoteStarPower,
+                    (int) FiveFretGuitarFret.Yellow => YellowNoteStarPower,
+                    (int) FiveFretGuitarFret.Blue => BlueNoteStarPower,
+                    (int) FiveFretGuitarFret.Orange => OrangeNoteStarPower,
+                    (int) FiveFretGuitarFret.Wildcard => DefaultWildcardStarpower,
                     (int) FiveFretGuitarFret.Open => OpenNoteStarPower,
                     _ => default
                 };
             }
+
+            #endregion
+
+            #region Metal
+
+            public Color Metal          = DefaultMetal;
+            public Color MetalStarPower = DefaultMetalStarPower;
+
+            public Color GetMetalColor(bool isForStarPower)
+            {
+                return isForStarPower ? MetalStarPower : Metal;
+            }
+
+            #endregion
+
+            #region Miss Effect
+
+            public Color Miss = DefaultMiss;
 
             #endregion
 
@@ -187,6 +230,10 @@ namespace YARG.Core.Game
                 writer.Write(YellowNoteStarPower);
                 writer.Write(BlueNoteStarPower);
                 writer.Write(OrangeNoteStarPower);
+
+                writer.Write(TapStripEmission);
+                writer.Write(OpenHopoNote);
+                writer.Write(OpenHopoNoteStarPower);
             }
 
             public void Deserialize(BinaryReader reader, int version = 0)
@@ -225,6 +272,13 @@ namespace YARG.Core.Game
                 YellowNoteStarPower = reader.ReadColor();
                 BlueNoteStarPower = reader.ReadColor();
                 OrangeNoteStarPower = reader.ReadColor();
+
+                if (version >= 2)
+                {
+                    TapStripEmission = reader.ReadSingle();
+                    OpenHopoNote = reader.ReadColor();
+                    OpenHopoNoteStarPower = reader.ReadColor();
+                }
             }
 
             #endregion

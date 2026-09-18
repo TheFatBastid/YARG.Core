@@ -1,0 +1,164 @@
+﻿using System;
+
+// pattern: Functional Core
+
+namespace YARG.Core.Engine.Keys
+{
+    public static class ProKeysUtilities
+    {
+        /*
+
+         One octave of piano key indices for reference (in hex):
+          ________________________________
+         |  |#| |#|  |  |#| |#| |#|  |   |
+         |  |1| |3|  |  |6| |8| |A|  |   |
+         | 0 | 2 | 4 | 5 | 7 | 9 | B | 0 |
+         |___|___|___|___|___|___|___|___|
+         ^----------^ ^-------------^
+          Lower Half    Upper Half
+
+        */
+
+        /// <returns>
+        /// Whether or not the specified note index is a black key.
+        /// </returns>
+        /// <param name="noteIndex">The note index of the key mod 12.</param>
+        public static bool IsBlackKey(int noteIndex)
+        {
+            return noteIndex is 1 or 3 or 6 or 8 or 10;
+        }
+
+        /// <returns>
+        /// Whether or not the specified note index is a white key.
+        /// </returns>
+        /// <param name="noteIndex">The note index of the key mod 12.</param>
+        public static bool IsWhiteKey(int noteIndex)
+        {
+            return !IsBlackKey(noteIndex);
+        }
+
+        public const int WHITE_KEY_COUNT = 10;
+        public const int BLACK_KEY_COUNT = 7;
+
+        /// <summary>
+        /// Returns a key index from the 17-key window starting at low C for the
+        /// requested key color and zero-based color index.
+        /// </summary>
+        public static int GetKeyIndexForColor(bool black, int colorIndex)
+        {
+            int colorCount = black ? BLACK_KEY_COUNT : WHITE_KEY_COUNT;
+            if (colorIndex < 0 || colorIndex >= colorCount)
+            {
+                throw new ArgumentOutOfRangeException(nameof(colorIndex), colorIndex,
+                    "The color index must be within the low-C key window.");
+            }
+
+            return black
+                ? colorIndex switch
+                {
+                    0 => 1,
+                    1 => 3,
+                    2 => 6,
+                    3 => 8,
+                    4 => 10,
+                    5 => 13,
+                    6 => 15,
+                    _ => throw new ArgumentOutOfRangeException(nameof(colorIndex), colorIndex, null)
+                }
+                : colorIndex switch
+                {
+                    0 => 0,
+                    1 => 2,
+                    2 => 4,
+                    3 => 5,
+                    4 => 7,
+                    5 => 9,
+                    6 => 11,
+                    7 => 12,
+                    8 => 14,
+                    9 => 16,
+                    _ => throw new ArgumentOutOfRangeException(nameof(colorIndex), colorIndex, null)
+                };
+        }
+
+        /// <return>
+        /// <c>true</c> if there is a missing black key (gap) between the specified black key
+        /// and the next one.
+        /// </return>
+        /// <param name="noteIndex">The note index of the key mod 12.</param>
+        public static bool IsGapOnNextBlackKey(int noteIndex)
+        {
+            return noteIndex is 3 or 10;
+        }
+
+        /// <return>
+        /// <c>true</c> if the specified key is on the lower half of the octave.
+        /// </return>
+        /// <param name="noteIndex">The note index of the key mod 12.</param>
+        public static bool IsLowerHalfKey(int noteIndex)
+        {
+            return noteIndex is >= 0 and <= 4;
+        }
+
+        /// <return>
+        /// <c>true</c> if the specified key is on the upper half of the octave.
+        /// </return>
+        /// <param name="noteIndex">The note index of the key mod 12.</param>
+        public static bool IsUpperHalfKey(int noteIndex)
+        {
+            return !IsLowerHalfKey(noteIndex);
+        }
+
+        public static bool IsAdjacentKey(int noteIndex, int adjacentNoteIndex)
+        {
+            var difference = Math.Abs(adjacentNoteIndex - noteIndex);
+
+            if (difference == 1)
+            {
+                return true;
+            }
+
+            if (IsWhiteKey(noteIndex))
+            {
+                if (IsWhiteKey(adjacentNoteIndex) && difference == 2)
+                {
+                    return true;
+                }
+            } else if (IsBlackKey(noteIndex))
+            {
+                if (IsBlackKey(adjacentNoteIndex) && difference == 2)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        public const int LOW_C = 0;
+        public const int LOW_C_SHARP = 1;
+        public const int LOW_D = 2;
+        public const int LOW_D_SHARP = 3;
+        public const int LOW_E = 4;
+        public const int LOW_F = 5;
+        public const int LOW_F_SHARP = 6;
+        public const int LOW_G = 7;
+        public const int LOW_G_SHARP = 8;
+        public const int LOW_A = 9;
+        public const int LOW_A_SHARP = 10;
+        public const int LOW_B = 11;
+        public const int MIDDLE_C = 12;
+        public const int HIGH_C_SHARP = 13;
+        public const int HIGH_D = 14;
+        public const int HIGH_D_SHARP = 15;
+        public const int HIGH_E = 16;
+        public const int HIGH_F = 17;
+        public const int HIGH_F_SHARP = 18;
+        public const int HIGH_G = 19;
+        public const int HIGH_G_SHARP = 20;
+        public const int HIGH_A = 21;
+        public const int HIGH_A_SHARP = 22;
+        public const int HIGH_B = 23;
+        public const int HIGH_C = 24;
+    }
+}

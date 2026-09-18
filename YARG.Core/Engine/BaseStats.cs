@@ -1,4 +1,6 @@
-﻿using System.IO;
+﻿using System.Collections.Generic;
+using System.IO;
+using YARG.Core.Chart;
 using YARG.Core.Extensions;
 using YARG.Core.IO;
 using YARG.Core.Replays;
@@ -27,9 +29,9 @@ namespace YARG.Core.Engine
         /// Total score across all score values.
         /// </summary>
         /// <remarks>
-        /// Calculated from <see cref="CommittedScore"/>, <see cref="PendingScore"/>, and <see cref="SoloBonuses"/>.
+        /// Calculated from <see cref="CommittedScore"/>, <see cref="PendingScore"/>, <see cref="SoloBonuses"/>, and <see cref="CodaBonuses"/>.
         /// </remarks>
-        public int TotalScore => CommittedScore + PendingScore + SoloBonuses;
+        public int TotalScore => CommittedScore + PendingScore + SoloBonuses + CodaBonuses;
 
         /// <summary>
         /// Total score earned from hitting notes.
@@ -47,13 +49,9 @@ namespace YARG.Core.Engine
         public int MultiplierScore;
 
         /// <summary>
-        /// The score used to calculate star progress.
+        /// Total score earned from band bonuses, typically from Star Power/Overdrive activations from other players.
         /// </summary>
-        /// <remarks>
-        /// Calculated from <see cref="CommittedScore"/> and <see cref="PendingScore"/>.
-        /// <see cref="SoloBonuses"/> is not included in star progress.
-        /// </remarks>
-        public int StarScore => CommittedScore + PendingScore;
+        public int BandBonusScore;
 
         /// <summary>
         /// The player's current combo (such as 500 note streak)
@@ -81,14 +79,35 @@ namespace YARG.Core.Engine
         public int ScoreMultiplier;
 
         /// <summary>
+        /// The score multiplier currently applied to the entire band.
+        /// </summary>
+        public int BandMultiplier;
+
+        /// <summary>
+        /// The bonus multiplier awared to this player as a result of other players having Star Power/Overdrive active.
+        /// See also <see cref="BandBonusScore"/>.
+        /// </summary>
+        public int BandBonusMultiplier => IsStarPowerActive ? BandMultiplier - 2 : BandMultiplier - 1;
+
+        /// <summary>
         /// Number of notes which have been hit.
         /// </summary>
         public int NotesHit;
 
         /// <summary>
+        /// Number of laned notes which have been hit.
+        /// </summary>
+        public int LanedNotesHit;
+
+        /// <summary>
         /// Number of notes in the chart. This value should never be modified.
         /// </summary>
         public int TotalNotes;
+
+        /// <summary>
+        /// Number of chords in the chart. Defaults to total notes, but some instruments calculate differently.
+        /// </summary>
+        public int TotalChords;
 
         /// <summary>
         /// Number of notes which have been missed.
@@ -153,9 +172,24 @@ namespace YARG.Core.Engine
         public int StarPowerPhrasesMissed => TotalStarPowerPhrases - StarPowerPhrasesHit;
 
         /// <summary>
+        /// Number of times Star Power was used to revive a bandmate.
+        /// </summary>
+        public int StarPowerRevives;
+
+        /// <summary>
         /// Amount of points earned from solo bonuses.
         /// </summary>
         public int SoloBonuses;
+
+        /// <summary>
+        /// Total number of bonus points available from solos. Should not be modified.
+        /// </summary>
+        public int MaxSoloBonusPoints;
+
+        /// <summary>
+        /// Amount of points earned from coda bonuses.
+        /// </summary>
+        public int CodaBonuses;
 
         /// <summary>
         /// Amount of points earned from Star Power.
@@ -166,6 +200,31 @@ namespace YARG.Core.Engine
         /// The number of stars the player has achieved, along with the progress to the next star.
         /// </summary>
         public float Stars;
+
+        /// <summary>
+        /// Is this a full combo?
+        /// </summary>
+        public virtual bool IsFullCombo => MaxCombo == TotalNotes;
+
+        /// <summary>
+        /// The total offset. This, together with notes hit is used to calculate the average offset.
+        /// </summary>
+        private double TotalOffset;
+
+        /// <summary>
+        /// The average offset.
+        /// </summary>
+        private double AverageOffset;
+
+        /// <summary>
+        /// Individual note offsets for all hittable note objects, in seconds.
+        /// </summary>
+        private readonly List<double> OffsetSamples = new();
+
+        /// <summary>
+        /// The player's average multiplier. Calculated by CommittedScore / BaseNoteScore
+        /// </summary>
+        public float AverageMultiplier;
 
         protected BaseStats()
         {
@@ -178,11 +237,21 @@ namespace YARG.Core.Engine
             NoteScore = stats.NoteScore;
             SustainScore = stats.SustainScore;
             MultiplierScore = stats.MultiplierScore;
+            BandBonusScore = stats.BandBonusScore;
             Combo = stats.Combo;
             MaxCombo = stats.MaxCombo;
             ScoreMultiplier = stats.ScoreMultiplier;
+            BandMultiplier = stats.BandMultiplier;
+            AverageMultiplier = stats.AverageMultiplier;
+
             NotesHit = stats.NotesHit;
+            LanedNotesHit = stats.LanedNotesHit;
             TotalNotes = stats.TotalNotes;
+            TotalChords = stats.TotalChords;
+
+            TotalOffset = stats.TotalOffset;
+            AverageOffset = stats.AverageOffset;
+            OffsetSamples = new List<double>(stats.OffsetSamples);
 
             StarPowerTickAmount = stats.StarPowerTickAmount;
             TotalStarPowerTicks = stats.TotalStarPowerTicks;
@@ -196,6 +265,8 @@ namespace YARG.Core.Engine
             TotalStarPowerPhrases = stats.TotalStarPowerPhrases;
 
             SoloBonuses = stats.SoloBonuses;
+            MaxSoloBonusPoints = stats.MaxSoloBonusPoints;
+            CodaBonuses = stats.CodaBonuses;
             StarPowerScore = stats.StarPowerScore;
 
             Stars = stats.Stars;
@@ -208,10 +279,18 @@ namespace YARG.Core.Engine
             NoteScore = stream.Read<int>(Endianness.Little);
             SustainScore = stream.Read<int>(Endianness.Little);
             MultiplierScore = stream.Read<int>(Endianness.Little);
+            if (version >= 9)
+            {
+                BandBonusScore = stream.Read<int>(Endianness.Little);
+            }
 
             Combo = stream.Read<int>(Endianness.Little);
             MaxCombo = stream.Read<int>(Endianness.Little);
             ScoreMultiplier = stream.Read<int>(Endianness.Little);
+            if (version >= 9)
+            {
+                BandMultiplier = stream.Read<int>(Endianness.Little);
+            }
 
             NotesHit = stream.Read<int>(Endianness.Little);
             TotalNotes = stream.Read<int>(Endianness.Little);
@@ -226,8 +305,18 @@ namespace YARG.Core.Engine
             StarPowerPhrasesHit = stream.Read<int>(Endianness.Little);
             TotalStarPowerPhrases = stream.Read<int>(Endianness.Little);
 
+            if (version >= 17)
+            {
+                StarPowerRevives = stream.Read<int>(Endianness.Little);
+            }
+
             SoloBonuses = stream.Read<int>(Endianness.Little);
             StarPowerScore = stream.Read<int>(Endianness.Little);
+
+            if (version >= 16)
+            {
+                AverageMultiplier = stream.Read<float>(Endianness.Little);
+            }
 
             // Deliberately not read so that stars can be re-calculated if thresholds change
             // Stars = reader.ReadInt32();
@@ -240,10 +329,16 @@ namespace YARG.Core.Engine
             NoteScore = 0;
             SustainScore = 0;
             MultiplierScore = 0;
+            BandBonusScore = 0;
             Combo = 0;
             MaxCombo = 0;
             ScoreMultiplier = 1;
+            BandMultiplier = 1;
             NotesHit = 0;
+            TotalOffset = 0.0;
+            AverageOffset = 0.0;
+            OffsetSamples.Clear();
+            AverageMultiplier = 0;
             // Don't reset TotalNotes
             // TotalNotes = 0;
 
@@ -257,8 +352,11 @@ namespace YARG.Core.Engine
 
             StarPowerPhrasesHit = 0;
             // TotalStarPowerPhrases = 0;
+            StarPowerRevives = 0;
 
             SoloBonuses = 0;
+            CodaBonuses = 0;
+            // TotalSoloBonusPoints = 0;
             StarPowerScore = 0;
 
             Stars = 0;
@@ -271,10 +369,12 @@ namespace YARG.Core.Engine
             writer.Write(NoteScore);
             writer.Write(SustainScore);
             writer.Write(MultiplierScore);
+            writer.Write(BandBonusScore);
 
             writer.Write(Combo);
             writer.Write(MaxCombo);
             writer.Write(ScoreMultiplier);
+            writer.Write(BandMultiplier);
 
             writer.Write(NotesHit);
             writer.Write(TotalNotes);
@@ -288,14 +388,48 @@ namespace YARG.Core.Engine
 
             writer.Write(StarPowerPhrasesHit);
             writer.Write(TotalStarPowerPhrases);
+            writer.Write(StarPowerRevives);
 
             writer.Write(SoloBonuses);
             writer.Write(StarPowerScore);
+
+            writer.Write(AverageMultiplier);
 
             // Deliberately not written so that stars can be re-calculated with different thresholds
             // writer.Write(Stars);
         }
 
-        public abstract ReplayStats ConstructReplayStats(string name);
+        public abstract ReplayStats ConstructReplayStats(string name, bool isReplayPlayer);
+
+        public double GetAverageOffset()
+        {
+            var offsetNotes = NotesHit - LanedNotesHit;
+            return offsetNotes > 0 ? TotalOffset / offsetNotes : 0.0;
+        }
+
+        /// <summary>
+        /// Returns per-note timing offsets used for score-screen timing distribution visualization.
+        /// Values are in seconds, where negative is early and positive is late.
+        /// </summary>
+        public virtual IReadOnlyList<double> GetOffsetSamples()
+        {
+            return OffsetSamples;
+        }
+
+        public void IncrementNotesHit<NoteType>(NoteType note, double current_time) where NoteType : Note<NoteType>
+        {
+            NotesHit++;
+
+            if (!note.IsAnyLane)
+            {
+                double offset = current_time - note.Time;
+                TotalOffset += offset;
+                OffsetSamples.Add(offset);
+            }
+            else
+            {
+                LanedNotesHit++;
+            }
+        }
     }
 }

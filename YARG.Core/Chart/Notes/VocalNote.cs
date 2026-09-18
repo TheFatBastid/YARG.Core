@@ -67,21 +67,41 @@ namespace YARG.Core.Chart
         public bool IsPercussion => Type == VocalNoteType.Percussion;
 
         /// <summary>
-        /// Whether or not this note is a vocal phrase.
+        /// Whether or not this note is a phrase of any kind.
         /// </summary>
-        public bool IsPhrase => Type == VocalNoteType.Phrase;
+        public bool IsPhrase => Type is VocalNoteType.VocalPhrase or VocalNoteType.PercussionPhrase;
+
+        /// <summary>
+        /// Whether or not this note is a vocal phrase (either percussion or lyrical).
+        /// </summary>
+        public bool IsVocalPhrase => Type == VocalNoteType.VocalPhrase;
+
+        /// <summary>
+        /// Whether or not this note is a percussion phrase.
+        /// </summary>
+        public bool IsPercussionPhrase => Type == VocalNoteType.PercussionPhrase;
+
+        /// <summary>
+        /// Whether or not this note is a vocal phrase that contains only lyric notes.
+        /// </summary>
+        public bool IsLyricPhrase => Type == VocalNoteType.VocalPhrase && ChildNotes.All(e => e.Type == VocalNoteType.Lyric);
 
         /// <summary>
         /// Whether or not this note is a vocal phrase that contains no notes.
         /// </summary>
-        public bool IsEmptyPhrase => Type == VocalNoteType.Phrase && ChildNotes.Count == 0;
+        public bool IsEmptyPhrase => IsPhrase && ChildNotes.Count == 0;
+
+        /// <summary>
+        /// Whether this vocal note should be removed when vocal censorship is enabled.
+        /// </summary>
+        public bool IsCensorable { get; }
 
         /// <summary>
         /// Creates a new <see cref="VocalNote"/> with the given properties.
         /// This constructor should be used for notes only.
         /// </summary>
         public VocalNote(float pitch, int harmonyPart, VocalNoteType type,
-            double time, double timeLength, uint tick, uint tickLength)
+            double time, double timeLength, uint tick, uint tickLength, bool isCensorable = false)
             : base(NoteFlags.None, time, timeLength, tick, tickLength)
         {
             Type = type;
@@ -90,20 +110,22 @@ namespace YARG.Core.Chart
 
             TotalTimeLength = timeLength;
             TotalTickLength = tickLength;
+            IsCensorable = isCensorable;
         }
 
         /// <summary>
         /// Creates a new <see cref="VocalNote"/> phrase with the given properties.
         /// This constructor should be used for vocal phrases only.
         /// </summary>
-        public VocalNote(NoteFlags noteFlags,
+        public VocalNote(NoteFlags noteFlags, bool isPercussionPhrase,
             double time, double timeLength, uint tick, uint tickLength)
             : base(noteFlags, time, timeLength, tick, tickLength)
         {
-            Type = VocalNoteType.Phrase;
+            Type = isPercussionPhrase ? VocalNoteType.PercussionPhrase : VocalNoteType.VocalPhrase;
 
             TotalTimeLength = timeLength;
             TotalTickLength = tickLength;
+            IsCensorable = false; // A phrase itself is not censorable, only its children can be.
         }
 
         public VocalNote(VocalNote other) : base(other)
@@ -114,6 +136,7 @@ namespace YARG.Core.Chart
 
             TotalTimeLength = other.TotalTimeLength;
             TotalTickLength = other.TotalTickLength;
+            IsCensorable = other.IsCensorable;
         }
 
         /// <summary>
@@ -122,7 +145,7 @@ namespace YARG.Core.Chart
         /// </summary>
         public float PitchAtSongTime(double time)
         {
-            if (Type == VocalNoteType.Phrase)
+            if (IsPhrase)
             {
                 return -1f;
             }
@@ -166,7 +189,7 @@ namespace YARG.Core.Chart
              (but I have no idea how vocals works) - Riley
             */
 
-            if (IsPhrase)
+            if (IsLyricPhrase)
             {
                 if (note.Tick < Tick) return;
 
@@ -182,16 +205,18 @@ namespace YARG.Core.Chart
             }
             else
             {
-                if (note.Tick <= Tick || note.ChildNotes.Count > 0) return;
+                // Use strict less-than (<) instead of less-than-or-equal (<=) to allow notes
+                // that start on the same tick as the parent phrase. This is necessary for formats
+                // like UltraStar where the first note of a phrase can share the same start tick
+                // as the phrase itself. The original <= would silently discard such notes.
+                if (note.Tick < Tick || note.ChildNotes.Count > 0) return;
 
                 _childNotes.Add(note);
 
                 // Sort child notes by tick
                 _childNotes.Sort((note1, note2) =>
                 {
-                    if (note1.Tick > note2.Tick) return 1;
-                    if (note1.Tick < note2.Tick) return -1;
-                    return 0;
+                    return note1.Tick.CompareTo(note2.Tick);
                 });
 
                 // Track total length
@@ -214,6 +239,25 @@ namespace YARG.Core.Chart
         {
             _childNotes.RemoveAll(e => e.Type == VocalNoteType.Percussion);
         }
+
+        /// <summary>
+        /// Gets the number of ticks for the specified note that are within this parent note/phrase's bounds. If the note is outside of the parent note's bounds, 0 is returned.
+        /// </summary>
+        /// <param name="note">The note to be evaluated.</param>
+        /// <returns>The number of ticks for the provided note that falls within this note's bounds.</returns>
+        public uint GetTicksForNote(VocalNote note)
+        {
+            var start = Math.Max(note.Tick, Tick);
+            // Note the use of TotalTickEnd here to account for child notes (from slides), but *not* for the containing Phrase.
+            var end = Math.Min(note.TotalTickEnd, TickEnd);
+
+            if (start >= end)
+            {
+                return 0;
+            }
+
+            return end - start;
+        }
     }
 
     /// <summary>
@@ -221,8 +265,9 @@ namespace YARG.Core.Chart
     /// </summary>
     public enum VocalNoteType
     {
-        Phrase,
+        VocalPhrase,
         Lyric,
-        Percussion
+        Percussion,
+        PercussionPhrase
     }
 }

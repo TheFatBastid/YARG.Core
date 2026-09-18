@@ -1,12 +1,34 @@
 ﻿using System.Drawing;
 using System.IO;
+using YARG.Core.Chart;
 using YARG.Core.Extensions;
+using YARG.Core.Game.Settings;
 using YARG.Core.Utility;
 
 namespace YARG.Core.Game
 {
     public partial class ColorProfile
     {
+        public enum FourLaneDrumsFret
+        {
+            Kick,
+
+            RedDrum,
+            YellowDrum,
+            BlueDrum,
+            GreenDrum,
+
+            RedCymbal,
+            YellowCymbal,
+            BlueCymbal,
+            GreenCymbal,
+
+            WildcardPad,
+
+            // Exclusive to split-dedicated kick lanes
+            DoubleKick,
+        }
+
         public class FourLaneDrumsColors : IFretColorProvider, IBinarySerializable
         {
             #region Frets
@@ -23,6 +45,8 @@ namespace YARG.Core.Game
             public Color BlueCymbalFret = DefaultBlue;
             public Color GreenCymbalFret = DefaultGreen;
 
+            // Exclusive to split-dedicated kick lanes
+            public Color DoubleKickFret = DefaultPurple;
             /// <summary>
             /// Gets the fret color for a specific note index.
             /// 0 = kick note, 1 = red, 4 = green.
@@ -31,17 +55,20 @@ namespace YARG.Core.Game
             {
                 return index switch
                 {
-                    0 => KickFret,
-                    1 => RedFret,
-                    2 => YellowFret,
-                    3 => BlueFret,
-                    4 => GreenFret,
+                    (int)FourLaneDrumsFret.Kick => KickFret,
+                    (int)FourLaneDrumsFret.RedDrum => RedFret,
+                    (int)FourLaneDrumsFret.YellowDrum => YellowFret,
+                    (int)FourLaneDrumsFret.BlueDrum => BlueFret,
+                    (int)FourLaneDrumsFret.GreenDrum => GreenFret,
 
                     // Exclusive to split view
-                    5 => RedCymbalFret,
-                    6 => YellowCymbalFret,
-                    7 => BlueCymbalFret,
-                    8 => GreenCymbalFret,
+                    (int)FourLaneDrumsFret.RedCymbal => RedCymbalFret,
+                    (int)FourLaneDrumsFret.YellowCymbal => YellowCymbalFret,
+                    (int)FourLaneDrumsFret.BlueCymbal => BlueCymbalFret,
+                    (int)FourLaneDrumsFret.GreenCymbal => GreenCymbalFret,
+
+                    // Exclusive to split-dedicated kick lanes
+                    (int) FourLaneDrumsFret.DoubleKick => DoubleKickFret,
 
                     _ => default
                 };
@@ -59,6 +86,9 @@ namespace YARG.Core.Game
             public Color BlueCymbalFretInner = DefaultBlue;
             public Color GreenCymbalFretInner = DefaultGreen;
 
+            // Exclusive to split-dedicated kick lanes
+            public Color DoubleKickFretInner = DefaultPurple;
+
             /// <summary>
             /// Gets the inner fret color for a specific note index.
             /// 0 = kick note, 1 = red, 4 = green.
@@ -67,18 +97,20 @@ namespace YARG.Core.Game
             {
                 return index switch
                 {
-                    0 => KickFretInner,
-                    1 => RedFretInner,
-                    2 => YellowFretInner,
-                    3 => BlueFretInner,
-                    4 => GreenFretInner,
+                    (int)FourLaneDrumsFret.Kick => KickFretInner,
+                    (int)FourLaneDrumsFret.RedDrum => RedFretInner,
+                    (int)FourLaneDrumsFret.YellowDrum => YellowFretInner,
+                    (int)FourLaneDrumsFret.BlueDrum => BlueFretInner,
+                    (int)FourLaneDrumsFret.GreenDrum => GreenFretInner,
 
                     // Exclusive to split view
-                    5 => RedCymbalFretInner,
-                    6 => YellowCymbalFretInner,
-                    7 => BlueCymbalFretInner,
-                    8 => GreenCymbalFretInner,
+                    (int)FourLaneDrumsFret.RedCymbal => RedCymbalFretInner,
+                    (int)FourLaneDrumsFret.YellowCymbal => YellowCymbalFretInner,
+                    (int)FourLaneDrumsFret.BlueCymbal => BlueCymbalFretInner,
+                    (int)FourLaneDrumsFret.GreenCymbal => GreenCymbalFretInner,
 
+                    // Exclusive to split-dedicated kick lanes
+                    (int)FourLaneDrumsFret.DoubleKick => DoubleKickFretInner,
                     _ => default
                 };
             }
@@ -95,6 +127,9 @@ namespace YARG.Core.Game
             public Color BlueCymbalParticles = DefaultBlue;
             public Color GreenCymbalParticles = DefaultGreen;
 
+            // Exclusive to split-dedicated kick lanes
+            public Color DoubleKickParticles = DefaultPurple;
+
             /// <summary>
             /// Gets the particle color for a specific note index.
             /// 0 = kick note, 1 = red, 4 = green.
@@ -103,17 +138,20 @@ namespace YARG.Core.Game
             {
                 return index switch
                 {
-                    0 => KickParticles,
-                    1 => RedParticles,
-                    2 => YellowParticles,
-                    3 => BlueParticles,
-                    4 => GreenParticles,
+                    (int)FourLaneDrumsFret.Kick => KickParticles,
+                    (int)FourLaneDrumsFret.RedDrum => RedParticles,
+                    (int)FourLaneDrumsFret.YellowDrum => YellowParticles,
+                    (int)FourLaneDrumsFret.BlueDrum => BlueParticles,
+                    (int)FourLaneDrumsFret.GreenDrum => GreenParticles,
 
                     // Exclusive to split view
-                    5 => RedCymbalParticles,
-                    6 => YellowCymbalParticles,
-                    7 => BlueCymbalParticles,
-                    8 => GreenCymbalParticles,
+                    (int)FourLaneDrumsFret.RedCymbal => RedCymbalParticles,
+                    (int)FourLaneDrumsFret.YellowCymbal => YellowCymbalParticles,
+                    (int)FourLaneDrumsFret.BlueCymbal => BlueCymbalParticles,
+                    (int)FourLaneDrumsFret.GreenCymbal => GreenCymbalParticles,
+
+                    // Exclusive to split-dedicated kick lanes
+                    (int)FourLaneDrumsFret.DoubleKick => DoubleKickParticles,
 
                     _ => default
                 };
@@ -135,6 +173,9 @@ namespace YARG.Core.Game
             public Color BlueCymbal   = DefaultBlueCymbal;
             public Color GreenCymbal  = DefaultGreenCymbal;
 
+            // Exclusive to split-dedicated kick lanes
+            public Color DoubleKickNote = DefaultPurple;
+
             /// <summary>
             /// Gets the note color for a specific note index.
             /// 0 = kick note, 1 = red drum, 4 = green drum, 5 = yellow cymbal.
@@ -144,17 +185,22 @@ namespace YARG.Core.Game
             {
                 return index switch
                 {
-                    0 => KickNote,
+                    (int)FourLaneDrumsFret.Kick => KickNote,
 
-                    1 => RedDrum,
-                    2 => YellowDrum,
-                    3 => BlueDrum,
-                    4 => GreenDrum,
+                    (int)FourLaneDrumsFret.RedDrum => RedDrum,
+                    (int)FourLaneDrumsFret.YellowDrum => YellowDrum,
+                    (int)FourLaneDrumsFret.BlueDrum => BlueDrum,
+                    (int) FourLaneDrumsFret.GreenDrum => GreenDrum,
 
-                    5 => YellowCymbal,
-                    6 => BlueCymbal,
-                    7 => GreenCymbal,
-                    8 => RedCymbal,
+                    (int)FourLaneDrumsFret.RedCymbal => RedCymbal,
+                    (int)FourLaneDrumsFret.YellowCymbal => YellowCymbal,
+                    (int)FourLaneDrumsFret.BlueCymbal => BlueCymbal,
+                    (int)FourLaneDrumsFret.GreenCymbal => GreenCymbal,
+
+                    (int)FourLaneDrumsFret.WildcardPad => DefaultWildcard,
+
+                    // Exclusive to split-dedicated kick lanes
+                    (int) FourLaneDrumsFret.DoubleKick => DoubleKickNote,
 
                     _ => default
                 };
@@ -172,6 +218,9 @@ namespace YARG.Core.Game
             public Color BlueCymbalStarpower   = DefaultStarpower;
             public Color GreenCymbalStarpower  = DefaultStarpower;
 
+            // Exclusive to split-dedicated kick lanes
+            public Color DoubleKickStarpower = DefaultStarpower;
+
             /// <summary>
             /// Gets the Star Power note color for a specific note index.
             /// 0 = kick note, 1 = red drum, 4 = green drum, 5 = yellow cymbal.
@@ -181,23 +230,103 @@ namespace YARG.Core.Game
             {
                 return index switch
                 {
-                    0 => KickStarpower,
+                    (int)FourLaneDrumsFret.Kick => KickStarpower,
 
-                    1 => RedDrumStarpower,
-                    2 => YellowDrumStarpower,
-                    3 => BlueDrumStarpower,
-                    4 => GreenDrumStarpower,
+                    (int)FourLaneDrumsFret.RedDrum => RedDrumStarpower,
+                    (int)FourLaneDrumsFret.YellowDrum => YellowDrumStarpower,
+                    (int)FourLaneDrumsFret.BlueDrum => BlueDrumStarpower,
+                    (int)FourLaneDrumsFret.GreenDrum => GreenDrumStarpower,
 
-                    5 => YellowCymbalStarpower,
-                    6 => BlueCymbalStarpower,
-                    7 => GreenCymbalStarpower,
-                    8 => RedCymbalStarpower,
+                    (int)FourLaneDrumsFret.RedCymbal => RedCymbalStarpower,
+                    (int)FourLaneDrumsFret.YellowCymbal => YellowCymbalStarpower,
+                    (int)FourLaneDrumsFret.BlueCymbal => BlueCymbalStarpower,
+                    (int)FourLaneDrumsFret.GreenCymbal => GreenCymbalStarpower,
+
+                    (int)FourLaneDrumsFret.WildcardPad => DefaultWildcardStarpower,
+
+                    // Exclusive to split-dedicated kick lanes
+                    (int) FourLaneDrumsFret.DoubleKick => DoubleKickStarpower,
 
                     _ => default
                 };
             }
 
-            public Color ActivationNote = DefaultPurple;
+            public Color KickActivationNote = DefaultOrangeActivationNote;
+
+            public Color RedPadActivationNote    = DefaultRedActivationNote;
+            public Color YellowPadActivationNote = DefaultYellowActivationNote;
+            public Color BluePadActivationNote   = DefaultBlueActivationNote;
+            public Color GreenPadActivationNote  = DefaultGreenActivationNote;
+
+            public Color RedCymbalActivationNote    = DefaultRedActivationNote;
+            public Color YellowCymbalActivationNote = DefaultYellowActivationNote;
+            public Color BlueCymbalActivationNote   = DefaultBlueActivationNote;
+            public Color GreenCymbalActivationNote  = DefaultGreenActivationNote;
+
+            // Exclusive to split-dedicated kick lanes
+            public Color DoubleKickActivationNote = DefaultPurpleActivationNote;
+
+            /// <summary>
+            /// Gets the activation note color for a specific note index.
+            /// 0 = kick note, 1 = red drum, 4 = green drum, 5 = yellow cymbal.
+            /// 8 is a special case: it is the red cymbal that is used in lefty-flip.
+            /// </summary>
+            public Color GetActivationNoteColor(int index)
+            {
+                return index switch
+                {
+                    (int)FourLaneDrumsFret.Kick => KickActivationNote,
+
+                    (int)FourLaneDrumsFret.RedDrum => RedPadActivationNote,
+                    (int)FourLaneDrumsFret.YellowDrum => YellowPadActivationNote,
+                    (int)FourLaneDrumsFret.BlueDrum => BluePadActivationNote,
+                    (int)FourLaneDrumsFret.GreenDrum => GreenPadActivationNote,
+
+                    (int)FourLaneDrumsFret.RedCymbal => RedCymbalActivationNote,
+                    (int)FourLaneDrumsFret.YellowCymbal => YellowCymbalActivationNote,
+                    (int)FourLaneDrumsFret.BlueCymbal => BlueCymbalActivationNote,
+                    (int)FourLaneDrumsFret.GreenCymbal => GreenCymbalActivationNote,
+
+                    (int)FourLaneDrumsFret.WildcardPad => DefaultWildcard,
+
+                    // Exclusive to split-dedicated kick lanes
+                    (int)FourLaneDrumsFret.DoubleKick => DoubleKickActivationNote,
+
+                    _ => default
+                };
+            }
+
+            #region Note Appearance
+
+            /// <summary>
+            /// Emission intensity for the center strip of ghost/grace notes, as a
+            /// percentage (0–100). At 0 the strip appears dark (no emission
+            /// glow); at 100 it has full emission. Internally normalized to
+            /// 0.0–1.0 when applied as a material emission multiplier.
+            /// </summary>
+            [SettingType(SettingType.Slider)]
+            [SettingRange(0f, 100f)]
+            public float GhostStripEmission = 0f;
+
+            #endregion
+
+            #region Metal
+
+            public Color Metal          = DefaultMetal;
+            public Color MetalStarPower = DefaultMetalStarPower;
+
+            public Color GetMetalColor(bool isForStarPower)
+            {
+                return isForStarPower ? MetalStarPower : Metal;
+            }
+
+            #endregion
+
+            #region Miss Effect
+
+            public Color Miss = DefaultMiss;
+
+            #endregion
 
             #endregion
 
@@ -251,7 +380,20 @@ namespace YARG.Core.Game
                 writer.Write(BlueCymbalStarpower);
                 writer.Write(GreenCymbalStarpower);
 
-                writer.Write(ActivationNote);
+                writer.Write(KickActivationNote);
+
+                writer.Write(RedPadActivationNote);
+                writer.Write(YellowPadActivationNote);
+                writer.Write(BluePadActivationNote);
+                writer.Write(GreenPadActivationNote);
+
+                writer.Write(RedCymbalActivationNote);
+                writer.Write(YellowCymbalActivationNote);
+                writer.Write(BlueCymbalActivationNote);
+                writer.Write(GreenCymbalActivationNote);
+
+                writer.Write(Metal);
+                writer.Write(MetalStarPower);
 
                 writer.Write(RedCymbalFret);
                 writer.Write(YellowCymbalFret);
@@ -267,6 +409,16 @@ namespace YARG.Core.Game
                 writer.Write(YellowCymbalParticles);
                 writer.Write(BlueCymbalParticles);
                 writer.Write(GreenCymbalParticles);
+
+
+                writer.Write(DoubleKickFret);
+                writer.Write(DoubleKickFretInner);
+                writer.Write(DoubleKickParticles);
+                writer.Write(DoubleKickNote);
+                writer.Write(DoubleKickStarpower);
+                writer.Write(DoubleKickActivationNote);
+
+                writer.Write(GhostStripEmission);
             }
 
             public void Deserialize(BinaryReader reader, int version = 0)
@@ -311,7 +463,20 @@ namespace YARG.Core.Game
                 BlueCymbalStarpower = reader.ReadColor();
                 GreenCymbalStarpower = reader.ReadColor();
 
-                ActivationNote = reader.ReadColor();
+                KickActivationNote = reader.ReadColor();
+
+                RedPadActivationNote = reader.ReadColor();
+                YellowPadActivationNote = reader.ReadColor();
+                BluePadActivationNote = reader.ReadColor();
+                GreenPadActivationNote = reader.ReadColor();
+
+                RedCymbalActivationNote = reader.ReadColor();
+                YellowCymbalActivationNote = reader.ReadColor();
+                BlueCymbalActivationNote = reader.ReadColor();
+                GreenCymbalActivationNote = reader.ReadColor();
+
+                Metal = reader.ReadColor();
+                MetalStarPower = reader.ReadColor();
 
                 RedCymbalFret = reader.ReadColor();
                 YellowCymbalFret = reader.ReadColor();
@@ -328,6 +493,17 @@ namespace YARG.Core.Game
                 BlueCymbalParticles = reader.ReadColor();
                 GreenCymbalParticles = reader.ReadColor();
 
+                DoubleKickFret = reader.ReadColor();
+                DoubleKickFretInner = reader.ReadColor();
+                DoubleKickParticles = reader.ReadColor();
+                DoubleKickNote = reader.ReadColor();
+                DoubleKickStarpower = reader.ReadColor();
+                DoubleKickActivationNote = reader.ReadColor();
+
+                if (version >= 2)
+                {
+                    GhostStripEmission = reader.ReadSingle();
+                }
             }
 
             #endregion

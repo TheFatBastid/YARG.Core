@@ -12,11 +12,13 @@ namespace YARG.Core.Engine.Guitar
         public readonly bool InfiniteFrontEnd;
         public readonly bool AntiGhosting;
         public readonly bool SoloTaps;
+        public readonly bool NoStarPowerOverlap;
 
         public GuitarEngineParameters(HitWindowSettings hitWindow, int maxMultiplier, double spWhammyBuffer,
-            double sustainDropLeniency, float[] starMultiplierThresholds, double hopoLeniency, double strumLeniency,
-            double strumLeniencySmall, bool infiniteFrontEnd, bool antiGhosting, bool soloTaps)
-            : base(hitWindow, maxMultiplier, spWhammyBuffer, sustainDropLeniency, starMultiplierThresholds)
+            double sustainDropLeniency, float[] starMultiplierThresholds, float[] soloBonusStarMultiplierThresholds, double hopoLeniency, double strumLeniency,
+            double strumLeniencySmall, bool infiniteFrontEnd, bool antiGhosting, bool soloTaps, bool noStarPowerOverlap,
+            bool enableLanes)
+            : base(hitWindow, maxMultiplier, spWhammyBuffer, sustainDropLeniency, starMultiplierThresholds, soloBonusStarMultiplierThresholds, enableLanes)
         {
             HopoLeniency = hopoLeniency;
 
@@ -27,6 +29,7 @@ namespace YARG.Core.Engine.Guitar
             AntiGhosting = antiGhosting;
 
             SoloTaps = soloTaps;
+            NoStarPowerOverlap = noStarPowerOverlap;
         }
 
         public GuitarEngineParameters(ref FixedArrayStream stream, int version)
@@ -40,6 +43,9 @@ namespace YARG.Core.Engine.Guitar
             InfiniteFrontEnd = stream.ReadBoolean();
             AntiGhosting = stream.ReadBoolean();
             SoloTaps = stream.ReadBoolean();
+            if (version >= 9) {
+                NoStarPowerOverlap = stream.ReadBoolean();
+            }
         }
 
         public override void Serialize(BinaryWriter writer)
@@ -55,6 +61,7 @@ namespace YARG.Core.Engine.Guitar
             writer.Write(AntiGhosting);
 
             writer.Write(SoloTaps);
+            writer.Write(NoStarPowerOverlap);
         }
 
         public override string ToString()
@@ -64,6 +71,7 @@ namespace YARG.Core.Engine.Guitar
                 $"Infinite front-end: {InfiniteFrontEnd}\n" +
                 $"Anti-ghosting: {AntiGhosting}\n" +
                 $"Solo taps: {SoloTaps}\n" +
+                $"No star power overlap: {NoStarPowerOverlap}\n" +
                 $"Hopo leniency: {HopoLeniency}\n" +
                 $"Strum leniency: {StrumLeniency}\n" +
                 $"Strum leniency (small): {StrumLeniencySmall}\n" +

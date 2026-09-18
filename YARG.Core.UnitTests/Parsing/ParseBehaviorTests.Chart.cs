@@ -81,6 +81,10 @@ namespace YARG.Core.UnitTests.Parsing
             { GameMode.GHLGuitar, GhlGuitarNoteLookup },
         };
 
+        private static readonly MoonInstrument[] SupportedInstruments = InstrumentToNameLookup.Keys
+            .Where((instrument) => InstrumentToNoteLookupLookup.ContainsKey(MoonSong.InstrumentToChartGameMode(instrument)))
+            .ToArray();
+
         private static readonly Dictionary<MoonPhrase.Type, uint> SpecialPhraseLookup = new()
         {
             { MoonPhrase.Type.Starpower,           PHRASE_STARPOWER },
@@ -122,10 +126,31 @@ namespace YARG.Core.UnitTests.Parsing
                 section.AddEvent(bpm.Tick, "B", writtenBpm);
             }
 
-            foreach (var ts in syncTrack.TimeSignatures)
+            for (int i = 0; i < syncTrack.TimeSignatures.Count; i++)
             {
+                var ts = syncTrack.TimeSignatures[i];
+                if (ts.IsInterrupted)
+                {
+                    if (i == 0)
+                    {
+                        Assert.Fail($"Invalid interrupted time signature <{ts}>");
+                        return;
+                    }
+
+                    var prevTs = syncTrack.TimeSignatures[i - 1];
+                    Assert.Multiple(() =>
+                    {
+                        Assert.That(ts.Numerator, Is.EqualTo(prevTs.Numerator), "Interrupted time signatures must match the previous time signature");
+                        Assert.That(ts.Denominator, Is.EqualTo(prevTs.Denominator), "Interrupted time signatures must match the previous time signature");
+                    });
+                    continue;
+                }
+
                 section.AddEvent(ts.Tick, "TS", ts.Numerator, (uint) Math.Log2(ts.Denominator));
             }
+
+            // .chart does not store beatline information
+            syncTrack.Beatlines.Clear();
 
             FinalizeSection(builder, SECTION_SYNC_TRACK, section);
         }
@@ -298,7 +323,7 @@ namespace YARG.Core.UnitTests.Parsing
 
         public static string GenerateChartFile()
         {
-            var song = GenerateSong();
+            var song = GenerateSong(SupportedInstruments);
             return GenerateChartFile(song);
         }
 
@@ -307,7 +332,7 @@ namespace YARG.Core.UnitTests.Parsing
         {
             YargLogger.AddLogListener(new DebugYargLogListener());
 
-            var sourceSong = GenerateSong();
+            var sourceSong = GenerateSong(SupportedInstruments);
             string chartText = GenerateChartFile(sourceSong);
             MoonSong parsedSong;
             try

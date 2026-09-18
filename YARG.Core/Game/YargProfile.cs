@@ -1,17 +1,25 @@
-﻿using System;
+#nullable disable
+using System;
 using System.IO;
 using Newtonsoft.Json;
 using YARG.Core.Chart;
 using YARG.Core.Utility;
 using YARG.Core.Extensions;
 using System.Linq;
+using System.Runtime.Serialization;
 using YARG.Core.IO;
 
 namespace YARG.Core.Game
 {
-    public class YargProfile
+    public partial class YargProfile
     {
-        private const int PROFILE_VERSION = 4;
+        /// <summary>
+        /// The current version for profile serialization.
+        /// Increment this when adding new fields to the profile that may affect deserialization.
+        /// </summary>
+        private const int PROFILE_VERSION = 9;
+
+        public int Version;
 
         public Guid Id;
         public string Name;
@@ -27,13 +35,20 @@ namespace YARG.Core.Game
 
         public bool RangeEnabled;
 
+        public int FourLaneDrumsHighwayOrderingLength;
+        public DrumsHighwayItem[] FourLaneDrumsHighwayOrdering;
+
+        public int ProDrumsHighwayOrderingLength;
+        public DrumsHighwayItem[] ProDrumsHighwayOrdering;
+
+        public int FiveLaneDrumsHighwayOrderingLength;
+        public DrumsHighwayItem[] FiveLaneDrumsHighwayOrdering;
+
         public bool UseCymbalModels;
 
-        public bool SplitProTomsAndCymbals;
+        public OpenLaneDisplayType OpenLaneDisplayType;
 
-        public bool SwapSnareAndHiHat;
-
-        public bool SwapCrashAndRide;
+        public StarPowerActivationType StarPowerActivationType;
 
         public int? AutoConnectOrder;
 
@@ -52,11 +67,19 @@ namespace YARG.Core.Game
         public Guid ColorProfile;
         public Guid CameraPreset;
         public Guid HighwayPreset;
+        public Guid RockMeterPreset;
 
         /// <summary>
         /// The selected instrument.
         /// </summary>
         public Instrument CurrentInstrument;
+
+        /// <summary>
+        /// The user's preferred instrument, which may differ from CurrentInstrument when the preferred instrument
+        /// is not available for a given chart. This should only be modified when the user explicitly changes their
+        /// instrument selection when the previous PreferredInstrument is also available.
+        /// </summary>
+        public Instrument PreferredInstrument;
 
         /// <summary>
         /// The selected difficulty.
@@ -72,12 +95,22 @@ namespace YARG.Core.Game
         /// </summary>
         public Difficulty DifficultyFallback;
 
+        /// <summary>
+        /// The harmony part the player last *explicitly* selected. Mirrors
+        /// <see cref="DifficultyFallback"/>: songs with fewer parts never overwrite it,
+        /// so the preference survives visiting a song where it isn't available.
+        /// Serialized as "HarmonyIndex" for compatibility with existing profiles.
+        /// </summary>
         [JsonProperty("HarmonyIndex")]
+        private byte _harmonyIndexFallback;
+
         private byte _harmonyIndex;
 
         /// <summary>
         /// The harmony index, used for determining what harmony part the player selected.
         /// Does nothing if <see cref="CurrentInstrument"/> is not a harmony.
+        /// Setting this counts as an explicit selection and updates the fallback;
+        /// use <see cref="ResolveHarmonyIndex"/> for per-song adjustment.
         /// </summary>
         [JsonIgnore]
         public byte HarmonyIndex
@@ -85,15 +118,49 @@ namespace YARG.Core.Game
             // Only expose harmony index when playing harmonies, ensures consistent behavior
             // while still allowing harmony index to persist between instrument switches
             get => CurrentInstrument == Instrument.Harmony ? _harmonyIndex : (byte) 0;
-            set => _harmonyIndex = value;
+            set => _harmonyIndex = _harmonyIndexFallback = value;
         }
 
         /// <summary>
-        /// The currently selected modifiers as a flag.
-        /// Use <see cref="AddSingleModifier"/> and <see cref="RemoveModifiers"/> to modify.
+        /// Recomputes the effective harmony index for a song with
+        /// <paramref name="harmonyPartCount"/> parts from the player's last explicit
+        /// selection, clamping to the highest available part rather than resetting to
+        /// zero. The explicit selection itself is left untouched, so a song with fewer
+        /// parts doesn't erase the preference (same behavior as
+        /// <see cref="DifficultyFallback"/> for Expert+). Operates on the raw backing
+        /// field so it works regardless of <see cref="CurrentInstrument"/>.
         /// </summary>
-        [JsonProperty]
+        public void ResolveHarmonyIndex(int harmonyPartCount)
+        {
+            if (harmonyPartCount <= 0)
+                return;
+
+            _harmonyIndex = _harmonyIndexFallback < harmonyPartCount
+                ? _harmonyIndexFallback
+                : (byte) (harmonyPartCount - 1);
+        }
+
+        /// <summary>
+        /// The modifiers the player explicitly selected, as saved in the profile.
+        /// Serialized under the same property name as the old combined value so
+        /// existing profiles load unchanged.
+        /// </summary>
+        [JsonProperty("CurrentModifiers")]
+        private Modifier _savedModifiers;
+
+        /// <summary>
+        /// The modifiers in effect for gameplay, as a flag.
+        /// Use <see cref="AddSingleModifier"/> and <see cref="RemoveModifiers"/> to modify;
+        /// these also update the saved selection. <see cref="ApplySessionModifiers"/> changes
+        /// only this value, leaving the saved selection intact.
+        /// </summary>
+        [JsonIgnore]
         public Modifier CurrentModifiers { get; private set; }
+
+        /// <summary>
+        /// The last time this profile was used.
+        /// </summary>
+        public DateTime LastUsed;
 
         public YargProfile()
         {
@@ -104,17 +171,24 @@ namespace YARG.Core.Game
             HighwayLength = 1;
             LeftyFlip = false;
             RangeEnabled = true;
+            FourLaneDrumsHighwayOrderingLength = 4;
+            FourLaneDrumsHighwayOrdering = DEFAULT_FOUR_LANE_ORDERING;
+            ProDrumsHighwayOrderingLength = 4;
+            ProDrumsHighwayOrdering = DEFAULT_FOUR_LANE_ORDERING;
+            FiveLaneDrumsHighwayOrderingLength = 5;
+            FiveLaneDrumsHighwayOrdering = DEFAULT_FIVE_LANE_ORDERING;
             UseCymbalModels = true;
-            SplitProTomsAndCymbals = false;
-            SwapSnareAndHiHat = false;
-            SwapCrashAndRide = false;
+            StarPowerActivationType = StarPowerActivationType.RightmostNote;
+            OpenLaneDisplayType = OpenLaneDisplayType.Never;
 
             // Set preset IDs to default
             ColorProfile = Game.ColorProfile.Default.Id;
             CameraPreset = Game.CameraPreset.Default.Id;
             HighwayPreset = Game.HighwayPreset.Default.Id;
+            RockMeterPreset = Game.RockMeterPreset.Normal.Id;
 
             CurrentModifiers = Modifier.None;
+            _savedModifiers = Modifier.None;
         }
 
         public YargProfile(Guid id) : this()
@@ -124,7 +198,7 @@ namespace YARG.Core.Game
 
         public YargProfile(ref FixedArrayStream stream)
         {
-            int version = stream.Read<int>(Endianness.Little);
+            Version = stream.Read<int>(Endianness.Little);
 
             Name = stream.ReadString();
 
@@ -134,32 +208,125 @@ namespace YARG.Core.Game
             ColorProfile = stream.ReadGuid();
             CameraPreset = stream.ReadGuid();
 
-            if (version >= 2)
+            if (Version >= 2)
             {
                 HighwayPreset = stream.ReadGuid();
             }
+            // This uses CurrentInstrument instead of PreferredInstrument because in replays we only care
+            // what instrument is actually being used for the current chart
             CurrentInstrument = (Instrument) stream.ReadByte();
             CurrentDifficulty = (Difficulty) stream.ReadByte();
             CurrentModifiers = (Modifier) stream.Read<ulong>(Endianness.Little);
-            _harmonyIndex = stream.ReadByte();
+            _savedModifiers = CurrentModifiers;
+            _harmonyIndex = _harmonyIndexFallback = stream.ReadByte();
 
             NoteSpeed = stream.Read<float>(Endianness.Little);
             HighwayLength = stream.Read<float>(Endianness.Little);
             LeftyFlip = stream.ReadBoolean();
 
-            GameMode = CurrentInstrument.ToGameMode();
-
-            if (version >= 3)
+            if (Version >= 3)
             {
                 RangeEnabled = stream.ReadBoolean();
             }
 
-            if (version >= 4)
+            if (Version >= 4)
             {
                 UseCymbalModels = stream.ReadBoolean();
-                SplitProTomsAndCymbals = stream.ReadBoolean();
-                SwapSnareAndHiHat = stream.ReadBoolean();
-                SwapCrashAndRide = stream.ReadBoolean();
+                var splitProTomsAndCymbals = stream.ReadBoolean();
+                var swapSnareAndHiHat = stream.ReadBoolean();
+                var swapCrashAndRide = stream.ReadBoolean();
+
+                if (Version < 8) // Interpret the old split-all and single-swap settings into highway orderings
+                {
+                    FourLaneDrumsHighwayOrderingLength = 4;
+                    FourLaneDrumsHighwayOrdering = DEFAULT_FOUR_LANE_ORDERING;
+
+                    ProDrumsHighwayOrderingLength = splitProTomsAndCymbals ? 7 : 4;
+                    ProDrumsHighwayOrdering = splitProTomsAndCymbals ? new DrumsHighwayItem[]
+                    {
+                        swapSnareAndHiHat ?  DrumsHighwayItem.YellowCymbal : DrumsHighwayItem.Red,
+                        swapSnareAndHiHat ?  DrumsHighwayItem.Red : DrumsHighwayItem.YellowCymbal,
+                        DrumsHighwayItem.YellowDrum,
+                        swapCrashAndRide ? DrumsHighwayItem.GreenCymbal : DrumsHighwayItem.BlueCymbal,
+                        DrumsHighwayItem.BlueDrum,
+                        swapCrashAndRide ? DrumsHighwayItem.BlueCymbal : DrumsHighwayItem.GreenCymbal,
+                        DrumsHighwayItem.GreenDrum,
+                    } : DEFAULT_FOUR_LANE_ORDERING;
+
+                    FiveLaneDrumsHighwayOrderingLength = 5;
+                    FiveLaneDrumsHighwayOrdering = new DrumsHighwayItem[]
+                    {
+                        swapSnareAndHiHat ? DrumsHighwayItem.Yellow : DrumsHighwayItem.Red,
+                        swapSnareAndHiHat ? DrumsHighwayItem.Red : DrumsHighwayItem.Yellow,
+                        DrumsHighwayItem.Blue,
+                        DrumsHighwayItem.Orange,
+                        DrumsHighwayItem.Green
+                    };
+                }
+            } else
+            {
+                FourLaneDrumsHighwayOrderingLength = 4;
+                FourLaneDrumsHighwayOrdering = DEFAULT_FOUR_LANE_ORDERING;
+                ProDrumsHighwayOrderingLength = 4;
+                ProDrumsHighwayOrdering = DEFAULT_FOUR_LANE_ORDERING;
+                FiveLaneDrumsHighwayOrderingLength = 5;
+                FiveLaneDrumsHighwayOrdering = DEFAULT_FIVE_LANE_ORDERING;
+            }
+
+            if (Version >= 5)
+            {
+                StarPowerActivationType = (StarPowerActivationType) stream.ReadByte();
+            }
+            else
+            {
+                StarPowerActivationType = StarPowerActivationType.RightmostNote;
+            }
+
+            if (Version >= 6)
+            {
+                GameMode = (GameMode) stream.ReadByte();
+            }
+            else
+            {
+                GameMode = CurrentInstrument.ToNativeGameMode();
+            }
+
+            if (Version >= 7)
+            {
+                OpenLaneDisplayType = (OpenLaneDisplayType) stream.ReadByte();
+            }
+            else
+            {
+                OpenLaneDisplayType = OpenLaneDisplayType.Never;
+            }
+
+            if (Version >= 8)
+            {
+                FourLaneDrumsHighwayOrderingLength = stream.ReadByte();
+                FourLaneDrumsHighwayOrdering = new DrumsHighwayItem[FourLaneDrumsHighwayOrderingLength];
+                for (var i = 0; i < FourLaneDrumsHighwayOrderingLength; i++)
+                {
+                    FourLaneDrumsHighwayOrdering[i] = (DrumsHighwayItem)stream.ReadByte();
+                }
+
+                ProDrumsHighwayOrderingLength = stream.ReadByte();
+                ProDrumsHighwayOrdering = new DrumsHighwayItem[ProDrumsHighwayOrderingLength];
+                for (var i = 0; i < ProDrumsHighwayOrderingLength; i++)
+                {
+                    ProDrumsHighwayOrdering[i] = (DrumsHighwayItem) stream.ReadByte();
+                }
+
+                FiveLaneDrumsHighwayOrderingLength = stream.ReadByte();
+                FiveLaneDrumsHighwayOrdering = new DrumsHighwayItem[FiveLaneDrumsHighwayOrderingLength];
+                for (var i = 0; i < FiveLaneDrumsHighwayOrderingLength; i++)
+                {
+                    FiveLaneDrumsHighwayOrdering[i] = (DrumsHighwayItem) stream.ReadByte();
+                }
+            }
+
+            if (Version >= 9)
+            {
+                RockMeterPreset = stream.ReadGuid();
             }
         }
 
@@ -168,11 +335,13 @@ namespace YARG.Core.Game
             // Remove conflicting modifiers first
             RemoveModifiers(ModifierConflicts.FromSingleModifier(modifier));
             CurrentModifiers |= modifier;
+            _savedModifiers = CurrentModifiers;
         }
 
         public void RemoveModifiers(Modifier modifier)
         {
             CurrentModifiers &= ~modifier;
+            _savedModifiers = CurrentModifiers;
         }
 
         public bool IsModifierActive(Modifier modifier)
@@ -184,19 +353,47 @@ namespace YARG.Core.Game
         {
             // The modifiers of the other profile are guaranteed to be correct
             CurrentModifiers = profile.CurrentModifiers;
+            _savedModifiers = CurrentModifiers;
         }
 
-        public void ApplyModifiers<TNote>(InstrumentDifficulty<TNote> track) where TNote : Note<TNote>
+        /// <summary>
+        /// Takes on another profile's modifiers for the current session only:
+        /// gameplay (and anything else reading <see cref="CurrentModifiers"/>) sees
+        /// the source profile's modifiers, while this profile's saved selection is
+        /// left untouched and will be restored on the next load.
+        /// </summary>
+        public void ApplySessionModifiers(YargProfile profile)
         {
-            switch (CurrentInstrument.ToGameMode())
+            CurrentModifiers = profile.CurrentModifiers;
+        }
+
+        /// <summary>
+        /// Discards any session-scoped modifiers (see <see cref="ApplySessionModifiers"/>)
+        /// and puts the player's saved selection back in effect. Call when starting a
+        /// fresh modifier-selection session so a previous song's imposed modifiers don't
+        /// linger on the in-memory profile.
+        /// </summary>
+        public void RestoreSavedModifiers()
+        {
+            CurrentModifiers = _savedModifiers;
+        }
+
+        public void ApplyModifiers<TNote>(InstrumentDifficulty<TNote> track, SyncTrack syncTrack) where TNote : Note<TNote>
+        {
+            switch (GameMode)
             {
                 case GameMode.FiveFretGuitar:
+                case GameMode.SixFretGuitar:
                     if (track is not InstrumentDifficulty<GuitarNote> guitarTrack)
                     {
                         throw new InvalidOperationException("Cannot apply guitar modifiers to non-guitar track " +
                             $"with notes of {typeof(TNote)}!");
                     }
 
+                    if (IsModifierActive(Modifier.OpensToGreens))
+                    {
+                        guitarTrack.ConvertFromOpenToGreen(syncTrack);
+                    }
                     if (IsModifierActive(Modifier.AllStrums))
                     {
                         guitarTrack.ConvertToGuitarType(GuitarNoteType.Strum);
@@ -225,6 +422,7 @@ namespace YARG.Core.Game
                     break;
                 case GameMode.FourLaneDrums:
                 case GameMode.FiveLaneDrums:
+                case GameMode.EliteDrums:
                     if (track is not InstrumentDifficulty<DrumNote> drumsTrack)
                     {
                         throw new InvalidOperationException("Cannot apply drum modifiers to non-drums track " +
@@ -242,9 +440,35 @@ namespace YARG.Core.Game
                     }
 
                     break;
+                case GameMode.ProKeys:
+                    if (track is InstrumentDifficulty<ProKeysNote> proKeysTrack)
+                    {
+                        // Apply Pro Keys modifiers (none exist currently)
+                        break;
+                    }
+
+                    if (track is InstrumentDifficulty<GuitarNote> fiveLaneKeysTrack)
+                    {
+                        // Apply Five-Lane Keys modifiers
+                        if (IsModifierActive(Modifier.RangeCompress))
+                        {
+                            fiveLaneKeysTrack.CompressGuitarRange();
+                        }
+                        if (IsModifierActive(Modifier.OpensToGreens))
+                        {
+                            fiveLaneKeysTrack.ConvertFromOpenToGreen(syncTrack);
+                        }
+                        break;
+                    }
+
+                    else
+                    {
+                        throw new InvalidOperationException("Cannot apply keys modifiers to non-keys and non-guitar " +
+                            $"track with notes of {typeof(TNote)}!");
+                    }
                 case GameMode.Vocals:
-                    throw new InvalidOperationException("For vocals, use ApplyVocalModifiers instead!");
-            }
+                            throw new InvalidOperationException("For vocals, use ApplyVocalModifiers instead!");
+                        }
         }
 
         public void ApplyVocalModifiers(VocalsPart vocalsPart)
@@ -262,11 +486,39 @@ namespace YARG.Core.Game
 
         public void EnsureValidInstrument()
         {
-
             if (!HasValidInstrument)
             {
                 CurrentInstrument = GameMode.PossibleInstruments()[0];
             }
+
+            ValidatePreferredInstrument();
+        }
+
+        [OnDeserialized]
+        public void ValidateJsonDeserialization(StreamingContext context)
+        {
+            // Seed the effective harmony index from the saved preference; it is
+            // re-resolved against each song's part count in difficulty select.
+            _harmonyIndex = _harmonyIndexFallback;
+
+            ValidatePreferredInstrument();
+
+            // The saved modifier selection is the serialized source of truth;
+            // a freshly loaded profile starts with it in effect.
+            CurrentModifiers = _savedModifiers;
+        }
+
+        private void ValidatePreferredInstrument()
+        {
+            if (!GameMode.PossibleInstruments().Contains(PreferredInstrument))
+            {
+                PreferredInstrument = HasValidInstrument ? CurrentInstrument : GameMode.PossibleInstruments()[0];
+            }
+        }
+
+        public void ClaimProfile()
+        {
+            LastUsed = DateTime.Now;
         }
 
         // For replay serialization
@@ -283,6 +535,8 @@ namespace YARG.Core.Game
             writer.Write(CameraPreset);
             writer.Write(HighwayPreset);
 
+            // This uses CurrentInstrument instead of PreferredInstrument because in replays we only care
+            // what instrument is actually being used for the current chart
             writer.Write((byte) CurrentInstrument);
             writer.Write((byte) CurrentDifficulty);
             writer.Write((ulong) CurrentModifiers);
@@ -295,9 +549,50 @@ namespace YARG.Core.Game
             writer.Write(RangeEnabled);
 
             writer.Write(UseCymbalModels);
-            writer.Write(SplitProTomsAndCymbals);
-            writer.Write(SwapSnareAndHiHat);
-            writer.Write(SwapCrashAndRide);
+            writer.Write((byte)0); // Superseded by highway orderings
+            writer.Write((byte)0); // Superseded by highway orderings
+            writer.Write((byte)0); // Superseded by highway orderings
+
+            writer.Write((byte) StarPowerActivationType);
+
+            writer.Write((byte) GameMode);
+
+            writer.Write((byte) OpenLaneDisplayType);
+
+            writer.Write((byte) FourLaneDrumsHighwayOrdering.Length);
+            foreach (var item in FourLaneDrumsHighwayOrdering)
+            {
+                writer.Write((byte) item);
+            }
+
+            writer.Write((byte) ProDrumsHighwayOrdering.Length);
+            foreach (var item in ProDrumsHighwayOrdering)
+            {
+                writer.Write((byte) item);
+            }
+
+            writer.Write((byte) FiveLaneDrumsHighwayOrdering.Length);
+            foreach (var item in FiveLaneDrumsHighwayOrdering)
+            {
+                writer.Write((byte) item);
+            }
+
+            writer.Write(RockMeterPreset);
         }
+
+        private static DrumsHighwayItem[] DEFAULT_FOUR_LANE_ORDERING = new DrumsHighwayItem[] {
+            DrumsHighwayItem.Red,
+            DrumsHighwayItem.Yellow,
+            DrumsHighwayItem.Blue,
+            DrumsHighwayItem.Green
+        };
+
+        private static DrumsHighwayItem[] DEFAULT_FIVE_LANE_ORDERING = new DrumsHighwayItem[] {
+            DrumsHighwayItem.Red,
+            DrumsHighwayItem.Yellow,
+            DrumsHighwayItem.Blue,
+            DrumsHighwayItem.Orange,
+            DrumsHighwayItem.Green
+        };
     }
 }

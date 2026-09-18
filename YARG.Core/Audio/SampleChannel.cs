@@ -10,25 +10,73 @@ namespace YARG.Core.Audio
         private bool _disposed;
 
         protected readonly string _path;
-        protected readonly int _playbackCount;
 
         public readonly SfxSample Sample;
-        protected SampleChannel(SfxSample sample, string path, int playbackCount)
+        protected SampleChannel(SfxSample sample, string path)
         {
             Sample = sample;
             _path = path;
-            _playbackCount = playbackCount;
 
             GlobalAudioHandler.StemSettings[SongStem.Sfx].OnVolumeChange += SetVolume;
         }
 
-        public void Play()
+        public void Play(double duration = 0)
         {
             lock (this)
             {
                 if (!_disposed)
                 {
-                    Play_Internal();
+                    Play_Internal(duration);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Creates an owned decode stream for sample-accurate playback in a song mixer.
+        /// </summary>
+        internal int CreateStream()
+        {
+            lock (this)
+            {
+                return _disposed ? 0 : CreateStream_Internal();
+            }
+        }
+
+        // TODO: Implement properly (fade out when duration approaches if sample is still playing)
+        public void PlayForTime(double duration)
+        {
+            Play();
+        }
+
+        public void Stop(double duration = 0)
+        {
+            lock (this)
+            {
+                if (!_disposed)
+                {
+                    Stop_Internal(duration);
+                }
+            }
+        }
+
+        public void Pause()
+        {
+            lock (this)
+            {
+                if (!_disposed)
+                {
+                    Pause_Internal();
+                }
+            }
+        }
+
+        public void Resume()
+        {
+            lock (this)
+            {
+                if (!_disposed)
+                {
+                    Resume_Internal();
                 }
             }
         }
@@ -44,8 +92,24 @@ namespace YARG.Core.Audio
             }
         }
 
-        protected abstract void Play_Internal();
+        internal void SetOutputChannel(OutputChannel channel)
+        {
+            lock (this)
+            {
+                if (!_disposed)
+                {
+                    SetOutputChannel_Internal(channel);
+                }
+            }
+        }
+
+        protected abstract void Play_Internal(double duration);
+        protected abstract int CreateStream_Internal();
+        protected abstract void Stop_Internal(double duration);
+        protected abstract void Pause_Internal();
+        protected abstract void Resume_Internal();
         protected abstract void SetVolume_Internal(double volume);
+        protected abstract void SetOutputChannel_Internal(OutputChannel? channel);
 
         protected virtual void DisposeManagedResources() { }
         protected virtual void DisposeUnmanagedResources() { }

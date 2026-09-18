@@ -13,23 +13,30 @@ namespace YARG.Core.Audio
         private const double DEFAULT_START_TIME = 20.0;
         private const double DEFAULT_END_TIME = 50.0;
 
-        public static async Task<PreviewContext?> Create(SongEntry entry, float volume, float speed, double delaySeconds, double fadeDuration, CancellationTokenSource token)
+        public static async Task<PreviewContext?> Create(
+            SongEntry entry,
+            float volume,
+            float speed,
+            double delaySeconds,
+            double fadeDuration,
+            bool enableCensoring,
+            CancellationToken token)
         {
             try
             {
                 if (delaySeconds > 0)
                 {
-                    await Task.Delay(TimeSpan.FromSeconds(delaySeconds));
+                    await Task.Delay(TimeSpan.FromSeconds(delaySeconds), token);
                 }
 
-                // Check if cancelled
+                // Check if canceled
                 if (token.IsCancellationRequested)
                 {
                     return null;
                 }
 
                 // Load the song
-                var mixer = await Task.Run(() => entry.LoadPreviewAudio(speed));
+                var mixer = await Task.Run(() => entry.LoadPreviewAudio(speed, enableCensoring), token);
                 if (mixer == null || token.IsCancellationRequested)
                 {
                     mixer?.Dispose();
@@ -85,12 +92,16 @@ namespace YARG.Core.Audio
                     }
                     previewLength = previewEndTime - previewStartTime;
                 }
-                
+
                 if (fadeDuration > previewLength / 4)
                 {
                     fadeDuration = previewLength / 4;
                 }
                 return new PreviewContext(mixer, previewStartTime, previewLength, fadeDuration, volume, token);
+            }
+            catch (OperationCanceledException)
+            {
+                return null;
             }
             catch (Exception ex)
             {
@@ -99,34 +110,39 @@ namespace YARG.Core.Audio
             }
         }
 
-        private StemMixer _mixer;
-        private Task _task;
-        private readonly double _previewStartTime;
-        private readonly double _previewLength;
-        private readonly double _fadeDruation;
-        private readonly float _volume;
-        private readonly CancellationTokenSource _token;
-        private bool _disposed;
+        private readonly StemMixer         _mixer;
+        private readonly Task              _task;
+        private readonly double            _previewStartTime;
+        private readonly double            _previewLength;
+        private readonly double            _fadeDuration;
+        private readonly float             _volume;
+        private readonly CancellationToken _token;
+        private          bool              _disposed;
 
-        private PreviewContext(StemMixer mixer, double previewStartTime, double previewLength, double fadeDuration, float volume, CancellationTokenSource token)
+        private PreviewContext(
+            StemMixer mixer,
+            double previewStartTime,
+            double previewLength,
+            double fadeDuration,
+            float volume,
+            CancellationToken token)
         {
             _mixer = mixer;
             _previewStartTime = previewStartTime;
             _previewLength = previewLength;
-            _fadeDruation = fadeDuration;
+            _fadeDuration = fadeDuration;
             _volume = volume;
             _token = token;
 
             _task = Task.Run(Loop);
         }
 
-        public async void Stop()
+        public async Task WaitForCompletionAsync()
         {
-            _token.Cancel();
             await _task;
         }
 
-        private async void Loop()
+        private async Task Loop()
         {
             try
             {
@@ -134,26 +150,28 @@ namespace YARG.Core.Audio
                 while (true)
                 {
                     _mixer.SetPosition(_previewStartTime);
-                    _mixer.FadeIn(_volume, _fadeDruation);
-                    _mixer.Play(true);
+                    _mixer.FadeIn(_volume, _fadeDuration);
+                    _mixer.Play();
                     watch.Restart();
-                    while (watch.Elapsed.TotalSeconds < _previewLength - _fadeDruation && !_token.IsCancellationRequested)
+                    while (watch.Elapsed.TotalSeconds < _previewLength - _fadeDuration && !_token.IsCancellationRequested)
                     {
                         if (_disposed)
                         {
                             return;
                         }
+                        // ReSharper disable once MethodSupportsCancellation
                         await Task.Delay(1);
                     }
 
                     watch.Restart();
-                    _mixer.FadeOut(_fadeDruation);
-                    while (watch.Elapsed.TotalSeconds < _fadeDruation)
+                    _mixer.FadeOut(_fadeDuration);
+                    while (watch.Elapsed.TotalSeconds < _fadeDuration)
                     {
                         if (_disposed)
                         {
                             return;
                         }
+                        // ReSharper disable once MethodSupportsCancellation
                         await Task.Delay(1);
                     }
 
@@ -173,13 +191,15 @@ namespace YARG.Core.Audio
 
         private void Dispose(bool disposing)
         {
-            if (!_disposed)
+            if (_disposed)
             {
-                _disposed = true;
-                if (disposing)
-                {
-                    _mixer.Dispose();
-                }
+                return;
+            }
+
+            _disposed = true;
+            if (disposing)
+            {
+                _mixer.Dispose();
             }
         }
 

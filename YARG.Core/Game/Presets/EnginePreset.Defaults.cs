@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 
 namespace YARG.Core.Game
 {
@@ -13,7 +13,40 @@ namespace YARG.Core.Game
                 AntiGhosting = false,
                 InfiniteFrontEnd = true,
                 StrumLeniency = 0.06,
-                StrumLeniencySmall = 0.03
+                StrumLeniencySmall = 0.03,
+                HitWindow =
+                {
+                    LaneAutohitWindow = 0.200,
+                    LaneProximityProtectionWindow = 0.100
+                }
+            },
+            SixFretGuitar =
+            {
+                AntiGhosting = false,
+                InfiniteFrontEnd = true,
+                StrumLeniency = 0.06,
+                StrumLeniencySmall = 0.03,
+                HitWindow =
+                {
+                    LaneAutohitWindow = 0.200,
+                    LaneProximityProtectionWindow = 0.100
+                }
+            },
+            Drums =
+            {
+                HitWindow =
+                {
+                    LaneAutohitWindow = 0.200,
+                    LaneProximityProtectionWindow = 0.100
+                }
+            },
+            ProKeys =
+            {
+                HitWindow =
+                {
+                    LaneAutohitWindow = 0.200,
+                    LaneProximityProtectionWindow = 0.100
+                }
             },
             Vocals =
             {
@@ -35,6 +68,24 @@ namespace YARG.Core.Game
                     DynamicScale = 1,
                     DynamicSlope = 0.93,
                     DynamicGamma = 1.5,
+                    LaneAutohitWindow = 0.160,
+                    LaneProximityProtectionWindow = 0.080
+                }
+            },
+            SixFretGuitar =
+            {
+                StrumLeniency = 0.04,
+                StrumLeniencySmall = 0.02,
+                HitWindow =
+                {
+                    MaxWindow = 0.12,
+                    MinWindow = 0.04,
+                    IsDynamic = true,
+                    DynamicScale = 1,
+                    DynamicSlope = 0.93,
+                    DynamicGamma = 1.5,
+                    LaneAutohitWindow = 0.160,
+                    LaneProximityProtectionWindow = 0.080
                 }
             },
             Drums =
@@ -46,7 +97,9 @@ namespace YARG.Core.Game
                     IsDynamic = true,
                     DynamicScale = 1,
                     DynamicSlope = 0.60615,
-                    DynamicGamma = 2
+                    DynamicGamma = 2,
+                    LaneAutohitWindow = 0.160,
+                    LaneProximityProtectionWindow = 0.080
                 }
             },
             Vocals =
@@ -59,11 +112,24 @@ namespace YARG.Core.Game
             }
         };
 
+        public static EnginePreset SoloTaps = new("Solo Taps", true)
+        {
+            FiveFretGuitar =
+            {
+                SoloTaps = true
+            },
+            SixFretGuitar =
+            {
+                SoloTaps = true
+            }
+        };
+
         public static readonly List<EnginePreset> Defaults = new()
         {
             Default,
             Casual,
-            Precision
+            Precision,
+            SoloTaps
         };
     }
 }

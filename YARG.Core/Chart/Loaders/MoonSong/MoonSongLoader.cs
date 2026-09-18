@@ -4,7 +4,9 @@ using System.IO;
 using Melanchall.DryWetMidi.Core;
 using MoonscraperChartEditor.Song;
 using MoonscraperChartEditor.Song.IO;
+using YARG.Core.Chart.Events;
 using YARG.Core.Logging;
+using YARG.Core.Parsing;
 
 namespace YARG.Core.Chart
 {
@@ -15,12 +17,17 @@ namespace YARG.Core.Chart
     /// </summary>
     internal partial class MoonSongLoader : ISongLoader
     {
-        private delegate TNote CreateNoteDelegate<TNote>(MoonNote moonNote, CurrentPhrases currentPhrases)
+        private delegate TNote CreateNoteDelegate<TNote>(MoonNote moonNote, CurrentPhrases currentPhrases, List<TNote> notes)
             where TNote : Note<TNote>;
         private delegate void ProcessTextDelegate(MoonText text);
+        private delegate Phrase? ValidatePhraseDelegate(Phrase phrase, List<Phrase> phrases);
+        private delegate void FinalPassDelegate<TNote>(InstrumentDifficulty<TNote> chart) where TNote : Note<TNote>;
 
         private MoonSong _moonSong;
         private ParseSettings _settings;
+        // .chart format uses inclusive solo phrase boundaries (the note at phrase end tick is inside the solo);
+        // .mid format uses exclusive boundaries. Other formats should set this based on their own spec.
+        private bool _inclusiveSoloBoundary;
 
         private GameMode _currentMode;
         private Instrument _currentInstrument;
@@ -30,22 +37,38 @@ namespace YARG.Core.Chart
         private MoonSong.MoonInstrument _currentMoonInstrument;
         private MoonSong.Difficulty _currentMoonDifficulty;
 
+        private readonly double _codaTime;
+        private readonly List<(uint start,uint end)> _codaTicks;
+
+        private enum LaneParsingState
+        {
+            None,
+            Tremolo,
+            Trill
+        }
+
         public MoonSongLoader(MoonSong song, in ParseSettings settings)
         {
             _moonSong = song;
             _settings = settings;
+            _codaTime = FindCodaTime();
+            _codaTicks = GetCodaTicks();
         }
 
         public static MoonSongLoader LoadSong(ParseSettings settings, string filePath)
         {
-            var song = Path.GetExtension(filePath).ToLower() switch
+            bool isChart = Path.GetExtension(filePath).ToLower() switch
             {
-                ".mid" => MidReader.ReadMidi(ref settings, filePath),
-                ".chart" => ChartReader.ReadFromFile(ref settings, filePath),
+                ".mid"   => false,
+                ".chart" => true,
                 _ => throw new ArgumentException($"Unrecognized file extension for chart path '{filePath}'!", nameof(filePath))
             };
 
-            return new(song, settings);
+            var song = isChart
+                ? ChartReader.ReadFromFile(ref settings, filePath)
+                : MidReader.ReadMidi(ref settings, filePath);
+
+            return new(song, settings) { _inclusiveSoloBoundary = isChart };
         }
 
         public static MoonSongLoader LoadMidi(ParseSettings settings, MidiFile midi)
@@ -56,8 +79,10 @@ namespace YARG.Core.Chart
 
         public static MoonSongLoader LoadDotChart(ParseSettings settings, ReadOnlySpan<char> chartText)
         {
+            // Reading from a .chart *file* is handled in LoadSong, and checks the extension
+            // This path reads from data already in-memory, which we know is '.chart', so this is hardcoded
             var song = ChartReader.ReadFromText(ref settings, chartText);
-            return new(song, settings);
+            return new(song, settings)  { _inclusiveSoloBoundary = true };
         }
 
         public List<TextEvent> LoadGlobalEvents()
@@ -72,6 +97,19 @@ namespace YARG.Core.Chart
 
             return textEvents;
         }
+
+        public List<CharacterState> LoadCharacterStates(MoonChart moonChart)
+        {
+            var characterStates = new List<CharacterState>();
+
+
+
+            return characterStates;
+        }
+
+        public List<HandMap> LoadHandMaps() => new List<HandMap>();
+
+        public List<StrumMap> LoadStrumMaps() => new List<StrumMap>();
 
         public List<Section> LoadSections()
         {
@@ -99,11 +137,16 @@ namespace YARG.Core.Chart
             return _moonSong.syncTrack;
         }
 
-        private InstrumentDifficulty<TNote> LoadDifficulty<TNote>(Instrument instrument, Difficulty difficulty,
-            CreateNoteDelegate<TNote> createNote, ProcessTextDelegate? processText = null)
+        private InstrumentDifficulty<TNote> LoadDifficulty<TNote>(
+            Instrument instrument,
+            Difficulty difficulty,
+            CreateNoteDelegate<TNote> createNote,
+            ProcessTextDelegate? processText = null,
+            ValidatePhraseDelegate? validatePhrase = null,
+            FinalPassDelegate<TNote>? finalPassDelegate = null)
             where TNote : Note<TNote>
         {
-            _currentMode = instrument.ToGameMode();
+            _currentMode = instrument.ToNativeGameMode();
             _currentInstrument = instrument;
             _currentDifficulty = difficulty;
 
@@ -113,9 +156,17 @@ namespace YARG.Core.Chart
 
             var moonChart = GetMoonChart(instrument, difficulty);
             var notes = GetNotes(moonChart, difficulty, createNote, processText);
-            var phrases = GetPhrases(moonChart);
+            var phrases = GetPhrases(moonChart, validatePhrase);
             var textEvents = GetTextEvents(moonChart);
-            return new(instrument, difficulty, notes, phrases, textEvents);
+
+            var chart = new InstrumentDifficulty<TNote>(instrument, difficulty, notes, phrases, textEvents);
+
+            if (finalPassDelegate is not null)
+            {
+                finalPassDelegate(chart);
+            }
+
+            return chart;
         }
 
         private List<TNote> GetNotes<TNote>(MoonChart moonChart, Difficulty difficulty,
@@ -160,9 +211,11 @@ namespace YARG.Core.Chart
 
                 // Skip Expert+ notes if not on Expert+
                 if (difficulty != Difficulty.ExpertPlus && (moonNote.flags & MoonNote.Flags.InstrumentPlus) != 0)
+                {
                     continue;
+                }
 
-                var newNote = createNote(moonNote, currentPhrases);
+                var newNote = createNote(moonNote, currentPhrases, notes);
                 AddNoteToList(notes, newNote);
             }
 
@@ -170,7 +223,7 @@ namespace YARG.Core.Chart
             return notes;
         }
 
-        private List<Phrase> GetPhrases(MoonChart moonChart)
+        private List<Phrase> GetPhrases(MoonChart moonChart, ValidatePhraseDelegate? validatePhrase = null)
         {
             var phrases = new List<Phrase>(moonChart.specialPhrases.Count);
             foreach (var moonPhrase in moonChart.specialPhrases)
@@ -183,7 +236,11 @@ namespace YARG.Core.Chart
                     MoonPhrase.Type.Versus_Player2      => PhraseType.VersusPlayer2,
                     MoonPhrase.Type.TremoloLane         => PhraseType.TremoloLane,
                     MoonPhrase.Type.TrillLane           => PhraseType.TrillLane,
+                    MoonPhrase.Type.BigRockEnding       => PhraseType.BigRockEnding,
+                    MoonPhrase.Type.Coda                => PhraseType.Coda,
+
                     MoonPhrase.Type.ProDrums_Activation => PhraseType.DrumFill,
+                    MoonPhrase.Type.ProDrums_KickLane   => PhraseType.KickLane,
 
                     MoonPhrase.Type.ProKeys_RangeShift0 => PhraseType.ProKeys_RangeShift0,
                     MoonPhrase.Type.ProKeys_RangeShift1 => PhraseType.ProKeys_RangeShift1,
@@ -192,15 +249,30 @@ namespace YARG.Core.Chart
                     MoonPhrase.Type.ProKeys_RangeShift4 => PhraseType.ProKeys_RangeShift4,
                     MoonPhrase.Type.ProKeys_RangeShift5 => PhraseType.ProKeys_RangeShift5,
 
+                    MoonPhrase.Type.EliteDrums_DiscoFlip => PhraseType.EliteDrums_DiscoFlip,
+
                     _ => null
                 };
 
                 if (!phraseType.HasValue)
+                {
                     continue;
+                }
 
                 double time = _moonSong.TickToTime(moonPhrase.tick);
                 var newPhrase = new Phrase(phraseType.Value, time, GetLengthInTime(moonPhrase), moonPhrase.tick, moonPhrase.length);
-                phrases.Add(newPhrase);
+
+                if (validatePhrase == null)
+                {
+                    phrases.Add(newPhrase);
+                    continue;
+                }
+
+                var validatedPhrase = validatePhrase(newPhrase, phrases);
+                if (validatedPhrase != null)
+                {
+                    phrases.Add(validatedPhrase);
+                }
             }
 
             return phrases;
@@ -221,34 +293,72 @@ namespace YARG.Core.Chart
 
         private NoteFlags GetGeneralFlags(MoonNote moonNote, CurrentPhrases currentPhrases)
         {
+            // In most cases, eligibility for trills simply means not being a chord
+            // Drums needs its own check to make exceptions for kicks
+            static bool DefaultTrillEligibilityCheck(MoonNote moonNote)
+            {
+                return !moonNote.isChord;
+            }
+
+            return GetGeneralFlags(moonNote, currentPhrases, DefaultTrillEligibilityCheck);
+        }
+
+        private NoteFlags GetGeneralFlags(MoonNote moonNote, CurrentPhrases currentPhrases, Func<MoonNote,bool> isEligibleForTrill)
+        {
             var flags = NoteFlags.None;
 
             var previous = moonNote.PreviousSeperateMoonNote;
             var next = moonNote.NextSeperateMoonNote;
 
             // Star power
-            if (currentPhrases.TryGetValue(MoonPhrase.Type.Starpower, out var starPower) && IsEventInPhrase(moonNote, starPower))
+            if (currentPhrases.TryGetValue(MoonPhrase.Type.Starpower, out var starPower) && IsEventInPhrase(moonNote, starPower, inclusiveEnd: false))
             {
                 flags |= NoteFlags.StarPower;
 
-                if (previous == null || !IsEventInPhrase(previous, starPower))
+                if (previous == null || !IsEventInPhrase(previous, starPower, inclusiveEnd: false))
+                {
                     flags |= NoteFlags.StarPowerStart;
+                }
 
-                if (next == null || !IsEventInPhrase(next, starPower))
+                if (next == null || !IsEventInPhrase(next, starPower, inclusiveEnd: false))
+                {
                     flags |= NoteFlags.StarPowerEnd;
+                }
             }
 
             // Solos
-            if (currentPhrases.TryGetValue(MoonPhrase.Type.Solo, out var solo) && IsEventInPhrase(moonNote, solo))
+            if (currentPhrases.TryGetValue(MoonPhrase.Type.Solo, out var solo) && IsEventInPhrase(moonNote, solo, inclusiveEnd: _inclusiveSoloBoundary))
             {
                 flags |= NoteFlags.Solo;
 
-                if (previous == null || !IsEventInPhrase(previous, solo))
+                if (previous == null || !IsEventInPhrase(previous, solo, inclusiveEnd: _inclusiveSoloBoundary))
+                {
                     flags |= NoteFlags.SoloStart;
+                }
 
-                if (next == null || !IsEventInPhrase(next, solo))
+                if (next == null || !IsEventInPhrase(next, solo, inclusiveEnd: _inclusiveSoloBoundary))
+                {
                     flags |= NoteFlags.SoloEnd;
+                }
             }
+
+            // Big Rock Ending
+            // End-inclusive: a note charted on the exact tick where the BRE ends is still
+            // covered by the BRE lanes and must be suppressed, not treated as a normal note.
+            if (currentPhrases.TryGetValue(MoonPhrase.Type.BigRockEnding, out var bigRockEnding) &&
+                IsEventInPhrase(moonNote, bigRockEnding, inclusiveEnd: true))
+            {
+                flags |= NoteFlags.BigRockEnding;
+            }
+
+            // Coda End (this one is weird because creating a MoonPhrase from text events seems hard so we set the flag
+            // in postproc)
+            if ((moonNote.flags & MoonNote.Flags.CodaEnd) != 0)
+            {
+                flags |= NoteFlags.CodaEnd;
+            }
+
+            // Trill and tremolo lanes are handled in the finalPassDelegate, since they're easiest to parse with Notes instead of MoonNotes
 
             return flags;
         }
@@ -260,6 +370,13 @@ namespace YARG.Core.Chart
             var currentParent = notes.Count > 0 ? notes[^1] : null;
             // Previous parent note (on a different tick)
             var previousParent = notes.Count > 1 ? notes[^2] : null;
+
+            // If we are not a laned note and the previous note is a laned note without a lane end flag
+            // add the lane end flag to that previous note
+            // if (!note.IsLane && currentParent is { IsLane: true, IsLaneEnd: false })
+            // {
+            //     currentParent.ActivateFlag(NoteFlags.LaneEnd);
+            // }
 
             // Determine if this is part of a chord
             if (currentParent != null)
@@ -316,7 +433,36 @@ namespace YARG.Core.Chart
             return GetLengthInTime(time, phrase.tick, phrase.length);
         }
 
-        private static bool IsEventInPhrase(MoonObject songObj, MoonPhrase phrase)
+        private double GetLengthInTime(MoonAnimation animation)
+        {
+            double time = _moonSong.TickToTime(animation.tick);
+            return GetLengthInTime(time, animation.tick, animation.length);
+        }
+
+        private double FindCodaTime()
+        {
+            // Work backwards since the coda event should be very near the end
+            for (int i = _moonSong.events.Count - 1; i >= 0; i--)
+            {
+                if (_moonSong.events[i].text != MidIOHelper.CODA_START)
+                {
+                    continue;
+                }
+
+                return _moonSong.TickToTime(_moonSong.events[i].tick);
+            }
+
+            // Didn't find one, so set it to MaxValue
+            return double.MaxValue;
+        }
+
+        private List<(uint,uint)> GetCodaTicks()
+        {
+            return MidReader.GetCodaRanges(_moonSong);
+        }
+
+        private static bool IsEventInPhrase(MoonObject songObj, MoonPhrase phrase,
+            bool inclusiveEnd = false)
         {
             if (songObj == null || phrase == null)
             {
@@ -330,63 +476,17 @@ namespace YARG.Core.Chart
             if (phrase.length == 0)
                 return songObj.tick == phrase.tick;
 
-            return phrase.tick <= songObj.tick && songObj.tick < (phrase.tick + phrase.length);
+            return inclusiveEnd
+                ? phrase.tick <= songObj.tick && songObj.tick <= (phrase.tick + phrase.length)
+                : phrase.tick <= songObj.tick && songObj.tick <  (phrase.tick + phrase.length);
         }
 
-        private static bool IsNoteClosestToEndOfPhrase(MoonSong song, MoonNote note, MoonPhrase phrase)
-        {
-            int endTick = (int) (phrase.tick + phrase.length);
-
-            // Find the note to compare against
-            MoonNote otherNote;
-            {
-                var previousNote = note.PreviousSeperateMoonNote;
-                var nextNote = note.NextSeperateMoonNote;
-
-                if (IsEventInPhrase(note, phrase))
-                {
-                    // Note is in the phrase, check if this is the last note in the phrase
-                    if (nextNote is not null && !IsEventInPhrase(nextNote, phrase))
-                    {
-                        // The phrase ends between the given note and the next note
-                        otherNote = nextNote;
-                    }
-                    else
-                    {
-                        // This is either the last note in the chart, or not the last note of the phrase
-                        return nextNote is null;
-                    }
-                }
-                else
-                {
-                    // Note is not in the phrase, check if the previous note is the last in the phrase
-                    if (previousNote is null)
-                    {
-                        // This is the first note in the chart, check by distance
-                        uint tickThreshold = song.resolution / 3; // 1/12th note
-                        return Math.Abs((int) note.tick - endTick) < tickThreshold;
-                    }
-                    else if (note.tick >= endTick && previousNote.tick < endTick)
-                    {
-                        // The phrase ends between the previous note and the given note
-                        // IsEventInPhrase() is not used here since cases such as drum activations at the end of breaks
-                        // can possibly make it so that neither the previous nor given note are in the phrase
-                        otherNote = previousNote;
-                    }
-                    else
-                    {
-                        // The phrase is not applicable to the given note
-                        return false;
-                    }
-                }
-            }
-
-            // Compare the distance of each note
-            // If the distances are equal, the previous note wins
-            int currentDistance = Math.Abs((int) note.tick - endTick);
-            int otherDistance = Math.Abs((int) otherNote.tick - endTick);
-            return currentDistance < otherDistance || (currentDistance == otherDistance && note.tick < otherNote.tick);
-        }
+        // REMOVED: IsNoteClosestToEndOfPhrase
+        // Removal date: 2026-04-14
+        // This method worked around the exclusive end boundary in IsEventInPhrase() using
+        // distance-based logic to find notes closest to phrase ends. It had zero callers
+        // in YARG.Core or the Unity project. The root cause is now fixed by the inclusiveEnd
+        // parameter on IsEventInPhrase(). Restore from git history if needed.
 
         private MoonChart GetMoonChart(Instrument instrument, Difficulty difficulty)
         {
@@ -402,6 +502,7 @@ namespace YARG.Core.Chart
 
             GameMode.FourLaneDrums => MoonChart.GameMode.Drums,
             GameMode.FiveLaneDrums => MoonChart.GameMode.Drums,
+            GameMode.EliteDrums => MoonChart.GameMode.EliteDrums,
 
             GameMode.ProGuitar => MoonChart.GameMode.ProGuitar,
             GameMode.ProKeys => MoonChart.GameMode.ProKeys,
@@ -420,13 +521,14 @@ namespace YARG.Core.Chart
             Instrument.Keys               => MoonSong.MoonInstrument.Keys,
 
             Instrument.SixFretGuitar     => MoonSong.MoonInstrument.GHLiveGuitar,
-            Instrument.SixFretCoopGuitar => MoonSong.MoonInstrument.GHLiveBass,
-            Instrument.SixFretBass       => MoonSong.MoonInstrument.GHLiveRhythm,
-            Instrument.SixFretRhythm     => MoonSong.MoonInstrument.GHLiveCoop,
+            Instrument.SixFretCoopGuitar => MoonSong.MoonInstrument.GHLiveCoop,
+            Instrument.SixFretBass       => MoonSong.MoonInstrument.GHLiveBass,
+            Instrument.SixFretRhythm     => MoonSong.MoonInstrument.GHLiveRhythm,
 
             Instrument.FourLaneDrums or
             Instrument.FiveLaneDrums or
             Instrument.ProDrums => MoonSong.MoonInstrument.Drums,
+            Instrument.EliteDrums => MoonSong.MoonInstrument.EliteDrums,
 
             Instrument.ProGuitar_17Fret => MoonSong.MoonInstrument.ProGuitar_17Fret,
             Instrument.ProGuitar_22Fret => MoonSong.MoonInstrument.ProGuitar_22Fret,
@@ -444,6 +546,7 @@ namespace YARG.Core.Chart
 
         private static MoonSong.Difficulty YargDifficultyToMoonDifficulty(Difficulty difficulty) => difficulty switch
         {
+            Difficulty.Beginner or
             Difficulty.Easy       => MoonSong.Difficulty.Easy,
             Difficulty.Medium     => MoonSong.Difficulty.Medium,
             Difficulty.Hard       => MoonSong.Difficulty.Hard,
@@ -451,5 +554,68 @@ namespace YARG.Core.Chart
             Difficulty.ExpertPlus => MoonSong.Difficulty.Expert,
             _ => throw new InvalidOperationException($"Invalid difficulty {difficulty}!")
         };
+
+        private static List<TNote> GetNotesInLanePhrase<TNote>(List<Phrase> phrases, int phraseIndex, List<TNote> allNotes, int startingIndex, out int nextIndex, bool lanesCanOverlap) where TNote : Note<TNote>
+        {
+            var phrase = phrases[phraseIndex];
+
+            var conterminousNextLaneExists = false;
+            // Find the next lane phrase, if any. If it exists and its start tick is the same as this phrase's end tick, then we'll treat this phrase as
+            // end-tick-exclusive to give the subsequent lane ownership of any note on that tick
+            for (var i = phraseIndex; i < phrases.Count; i++)
+            {
+                var laterPhrase = phrases[i];
+
+                if (laterPhrase.Tick > phrase.TickEnd)
+                {
+                    // We've moved on to phrases that don't abut this one; there is no conterminous next lane
+                    break;
+                }
+
+                if (laterPhrase.Tick == phrase.TickEnd && laterPhrase.Type is PhraseType.TremoloLane or PhraseType.TrillLane)
+                {
+                    conterminousNextLaneExists = true;
+                    break;
+                }
+            }
+
+
+            List<TNote> notesInPhrase = new();
+
+            nextIndex = startingIndex;
+
+            for (var i = startingIndex; i < allNotes.Count; i++)
+            {
+                var note = allNotes[i];
+
+                if (note.Tick < phrase.Tick)
+                {
+                    continue;
+                }
+
+                if (conterminousNextLaneExists && note.Tick == phrase.TickEnd)
+                {
+                    // If there's a conterminous next lane, then this lane phrase excludes its last tick and gives it to that subsequent phrase instead
+                    break;
+                }
+
+                if (note.Tick > phrase.TickEnd)
+                {
+                    break;
+                }
+
+                if (!lanesCanOverlap)
+                {
+                    // This is where the next GetNotesInPhrase call will start iterating from
+                    // If lanes are strictly nonoverlapping, then we can start iterating from where we left off with this lane
+                    // If lanes can overlap (e.g. kick lanes vs. hand lanes on drums), then we have to double back and recheck the notes, so don't set the nextIndex
+                    nextIndex = i + 1;
+                }
+
+                notesInPhrase.Add(note);
+            }
+
+            return notesInPhrase;
+        }
     }
 }

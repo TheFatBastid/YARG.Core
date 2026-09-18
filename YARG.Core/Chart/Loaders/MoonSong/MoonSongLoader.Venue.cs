@@ -10,19 +10,29 @@ namespace YARG.Core.Chart
 
     internal partial class MoonSongLoader : ISongLoader
     {
-
         public VenueTrack LoadVenueTrack()
         {
             var lightingEvents = new List<LightingEvent>();
             var postProcessingEvents = new List<PostProcessingEvent>();
             var performerEvents = new List<PerformerEvent>();
             var stageEvents = new List<StageEffectEvent>();
+            var cameraCutEvents = new List<CameraCutEvent>();
 
             // For merging spotlights/singalongs into a single event
             MoonVenue? spotlightCurrentEvent = null;
             MoonVenue? singalongCurrentEvent = null;
             var spotlightPerformers = Performer.None;
             var singalongPerformers = Performer.None;
+
+            // We need to do the same for camera cut events
+            MoonVenue? cameraCutCurrentEvent = null;
+            var currentCutConstraints = CameraCutEvent.CameraCutConstraint.None;
+            List<CameraCutEvent.CameraCutSubject> currentCutSubjects = new();
+
+            // And for post processing, it turns out
+            MoonVenue? postProcessingCurrentEvent = null;
+            PostProcessingType? postProcessingCurrentType = null;
+            var postProcessingIsTransitionStart = false;
 
             foreach (var moonVenue in _moonSong.venue)
             {
@@ -60,8 +70,9 @@ namespace YARG.Core.Chart
                         if (!PostProcessLookup.TryGetValue(text, out var type))
                             continue;
 
-                        double time = _moonSong.TickToTime(moonVenue.tick);
-                        postProcessingEvents.Add(new(type, time, moonVenue.tick));
+                        HandlePostProcessingEvent(postProcessingEvents, type, moonVenue,
+                            ref postProcessingCurrentEvent, ref postProcessingCurrentType,
+                            ref postProcessingIsTransitionStart);
                         break;
                     }
 
@@ -89,6 +100,18 @@ namespace YARG.Core.Chart
                         break;
                     }
 
+                    case VenueLookup.Type.CameraCut:
+                    {
+                        HandleCameraCutEvent(cameraCutEvents, moonVenue, ref cameraCutCurrentEvent, ref currentCutConstraints, ref currentCutSubjects);
+                        break;
+                    }
+
+                    case VenueLookup.Type.CameraCutConstraint:
+                    {
+                        HandleCameraCutEvent(cameraCutEvents, moonVenue, ref cameraCutCurrentEvent, ref currentCutConstraints, ref currentCutSubjects);
+                        break;
+                    }
+
                     default:
                     {
                         YargLogger.LogFormatDebug("Unrecognized venue text event '{0}'!", text);
@@ -97,16 +120,110 @@ namespace YARG.Core.Chart
                 }
             }
 
+            // Flush tracked events
+            FinalizePerformerEvent(performerEvents, PerformerEventType.Spotlight, ref spotlightCurrentEvent, spotlightPerformers);
+            FinalizePerformerEvent(performerEvents, PerformerEventType.Singalong, ref singalongCurrentEvent, singalongPerformers);
+            if (postProcessingCurrentEvent != null && postProcessingCurrentType != null)
+            {
+                FinalizePostProcessingEvent(postProcessingEvents, postProcessingCurrentType.Value,
+                    ref postProcessingCurrentEvent);
+            }
+
             lightingEvents.TrimExcess();
             postProcessingEvents.TrimExcess();
             performerEvents.TrimExcess();
             stageEvents.TrimExcess();
+            cameraCutEvents.TrimExcess();
 
-            return new(lightingEvents, postProcessingEvents, performerEvents, stageEvents);
+            return new(lightingEvents, postProcessingEvents, performerEvents, stageEvents, cameraCutEvents);
         }
 
-        private void HandlePerformerEvent(List<PerformerEvent> events, PerformerEventType type, MoonVenue moonEvent,
-            ref MoonVenue? currentEvent, ref Performer performers)
+        private void HandleCameraCutEvent(List<CameraCutEvent> events, MoonVenue moonEvent,
+            ref MoonVenue? currentEvent, ref CameraCutEvent.CameraCutConstraint constraints, ref List<CameraCutEvent.CameraCutSubject> currentCutSubjects)
+        {
+            // First event
+            if (currentEvent == null)
+            {
+                // It's possible we got the constraint before the subject, so check for that
+                if (moonEvent.type == VenueLookup.Type.CameraCutConstraint)
+                {
+                    if (!CameraCutConstraintLookup.TryGetValue(moonEvent.text, out constraints))
+                    {
+                        // Invalid event, so just return (this should never be possible)
+                        YargLogger.LogFormatDebug("Invalid camera cut constraint '{0}'!", moonEvent.text);
+                        return;
+                    }
+                }
+                else
+                {
+                    if (!CameraCutSubjectLookup.TryGetValue(moonEvent.text, out var currentCutSubject))
+                    {
+                        // Invalid event, so just return (this should never be possible)
+                        YargLogger.LogFormatDebug("Invalid camera cut subject '{0}'!", moonEvent.text);
+                        return;
+                    }
+
+                    // If we are here, we are at the first event and were not preceded by a constraint
+                    currentCutSubjects.Add(currentCutSubject);
+                    constraints = CameraCutEvent.CameraCutConstraint.None;
+                }
+
+                currentEvent = moonEvent;
+            }
+            else if (currentEvent.tick != moonEvent.tick)
+            {
+                // Moving on to the next event, so save previous
+                double time = _moonSong.TickToTime(currentEvent.tick);
+                double length = GetLengthInTime(currentEvent);
+                var subject = CameraCutEvent.CameraCutSubject.Random;
+
+                if (currentCutSubjects.Count == 1)
+                {
+                    subject = currentCutSubjects[0];
+                }
+
+                var cameraCut = new CameraCutEvent(CameraCutEvent.CameraCutPriority.Normal, constraints, subject, time, length, currentEvent.tick, currentEvent.length);
+
+                if (currentCutSubjects.Count > 1)
+                {
+                    // It's only a choice if there is more than one
+                    cameraCut.RandomChoices.AddRange(currentCutSubjects);
+
+                    // Also, remove random because it makes no sense in this context
+                    cameraCut.RandomChoices.RemoveAll(x => x == CameraCutEvent.CameraCutSubject.Random);
+                }
+
+                events.Add(cameraCut);
+
+                currentEvent = moonEvent;
+                constraints = CameraCutEvent.CameraCutConstraint.None;
+                currentCutSubjects.Clear();
+            }
+
+            // we could have gotten the subject or a constraint first, so act accordingly
+            if (moonEvent.type == VenueLookup.Type.CameraCutConstraint)
+            {
+                if (CameraCutConstraintLookup.TryGetValue(moonEvent.text, out var constraint))
+                {
+                    constraints |= constraint;
+                }
+            }
+            else if (moonEvent.type == VenueLookup.Type.CameraCut)
+            {
+                if (CameraCutSubjectLookup.TryGetValue(moonEvent.text, out var subject))
+                {
+                    currentCutSubjects.Add(subject);
+                }
+            }
+        }
+
+        private void HandlePerformerEvent(
+            List<PerformerEvent> events,
+            PerformerEventType type,
+            MoonVenue moonEvent,
+            ref MoonVenue? currentEvent,
+            ref Performer performers
+        )
         {
             // First event
             if (currentEvent == null)
@@ -116,10 +233,7 @@ namespace YARG.Core.Chart
             // Start of a new event
             else if (currentEvent.tick != moonEvent.tick && performers != Performer.None)
             {
-                double time = _moonSong.TickToTime(currentEvent.tick);
-                // Add tracked event
-                events.Add(new(type, performers, time, GetLengthInTime(currentEvent),
-                    currentEvent.tick, currentEvent.length));
+                FinalizePerformerEvent(events, type, ref currentEvent, performers);
 
                 // Track new event
                 currentEvent = moonEvent;
@@ -127,9 +241,112 @@ namespace YARG.Core.Chart
             }
 
             // Sing-along events are not optional, use the text directly
-            if (!PerformerLookup.TryGetValue(moonEvent.text, out var performer))
+            if (PerformerLookup.TryGetValue(moonEvent.text, out var performer))
+            {
+                performers |= performer;
+            }
+        }
+
+        private void FinalizePerformerEvent(
+            List<PerformerEvent> events,
+            PerformerEventType type,
+            ref MoonVenue? currentEvent,
+            Performer performers
+        )
+        {
+            if (currentEvent != null)
+            {
+                events.OrderedInsert(new(
+                    type,
+                    performers,
+                    _moonSong.TickToTime(currentEvent.tick),
+                    GetLengthInTime(currentEvent),
+                    currentEvent.tick,
+                    currentEvent.length
+                ));
+            }
+        }
+
+        private void HandlePostProcessingEvent(
+            List<PostProcessingEvent> events,
+            PostProcessingType type,
+            MoonVenue moonEvent,
+            ref MoonVenue? currentEvent,
+            ref PostProcessingType? currentType,
+            ref bool isTransitionStart
+        )
+        {
+            // No currently tracked event
+            if (currentEvent == null)
+            {
+                // If there is a length, this must have come from a note, so we can add it
+                // directly without tracking
+                if (moonEvent.length > 0)
+                {
+                    var sixteenthNote = _moonSong.syncTrack.Resolution / 4;
+
+                    // If it is less than a 16th note, treat it as if the length were 0
+                    if (moonEvent.length < sixteenthNote)
+                    {
+                        moonEvent.length = 0;
+                    }
+
+                    currentEvent = moonEvent;
+                    FinalizePostProcessingEvent(events, type, ref currentEvent);
+                    isTransitionStart = false;
+                    return;
+                }
+
+                // Having no length, this is a text event, so we must track it until we get called again
+                currentEvent = moonEvent;
+                isTransitionStart = false;
                 return;
-            performers |= performer;
+            }
+
+            // If this is the same type as the tracked event, we are starting a transition
+            if (type == currentType)
+            {
+                FinalizePostProcessingEvent(events, type, ref currentEvent);
+
+                currentEvent = moonEvent;
+                currentType = type;
+                isTransitionStart = true;
+                return;
+            }
+
+            // Different type. If last was a repeat, commit it with the length of moonevent - currentevent
+            if (isTransitionStart)
+            {
+                currentEvent.length = moonEvent.tick - currentEvent.tick;
+                FinalizePostProcessingEvent(events, type, ref currentEvent);
+            }
+            else
+            {
+                // Not a repeat, so flush current as-is
+                FinalizePostProcessingEvent(events, currentType, ref currentEvent);
+            }
+
+            currentEvent = moonEvent;
+            currentType = type;
+            isTransitionStart = false;
+        }
+
+        private void FinalizePostProcessingEvent(
+            List<PostProcessingEvent> events,
+            PostProcessingType? type,
+            ref MoonVenue? currentEvent
+        )
+        {
+            if (currentEvent != null && type != null)
+            {
+                events.OrderedInsert(new(type.Value,
+                    _moonSong.TickToTime(currentEvent.tick),
+                    GetLengthInTime(currentEvent),
+                    currentEvent.tick,
+                    currentEvent.length));
+            }
+
+            currentEvent = null;
         }
 
         private double GetLengthInTime(MoonVenue ev)

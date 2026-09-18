@@ -1,62 +1,82 @@
 ﻿using System;
 using System.Collections.Generic;
 using YARG.Core.Chart;
+using YARG.Core.Engine.Drums;
+using YARG.Core.Game;
 
 namespace YARG.Core.Engine
 {
     // Tracks and instantiates engines, handles IPC between engines, and events that affect multiple engines
     public partial class EngineManager
     {
-        private int _nextEngineIndex;
-        List <EngineContainer> _allEngines = new();
-        Dictionary<int, EngineContainer> _allEnginesById = new();
+        private int                      _nextEngineIndex;
+        List <EngineContainer>           _allEngines     = new();
+        public List<EngineContainer> Engines => _allEngines;
 
-        public class Band
+        private SongChart?               _chart;
+
+        public abstract partial class EngineContainer
         {
-            public List<EngineContainer> Engines { get; private set; }
-            public int Score { get; private set; }
+            public    int                 EngineId        { get; }
+            public    int                 HarmonyIndex    { get; }
+            public    List<UnisonPhrase>  UnisonPhrases   { get; }
+            public    RockMeterPreset     RockMeterPreset { get; }
+            protected List<EngineCommand> SentCommands = new();
+            private   int                 CommandCount => SentCommands.Count;
+            protected EngineManager       EngineManager;
 
-            private Band()
+            protected void OnStarPowerStatus(bool active)
             {
-                Engines = new List<EngineContainer>();
-                Score = 0;
+                int count = EngineManager._starpowerCount;
+                count += active ? 1 : -1;
+                EngineManager.UpdateStarPowerCount(count);
+            }
+
+            public virtual void UnsubscribeFromEvents()
+            {
+                BaseEngine.OnCodaStart -= EngineManager.CodaStartHandler;
+                BaseEngine.OnCodaEnd -= EngineManager.CodaEndHandler;
+            }
+
+            public abstract void SendCommand(EngineCommandType command);
+            public abstract void UpdateEngine(double time);
+            public abstract BaseEngine BaseEngine { get; }
+            public abstract Instrument Instrument { get; }
+            public abstract Difficulty Difficulty { get; }
+            public abstract void SubscribeToStarPowerPhraseHit();
+            public abstract void UnsubscribeFromStarPowerPhraseHit();
+            protected EngineContainer(int engineId, int harmonyIndex, EngineManager manager,
+                RockMeterPreset rockMeterPreset, List<UnisonPhrase> unisonPhrases)
+            {
+                EngineId = engineId;
+                HarmonyIndex = harmonyIndex;
+                EngineManager = manager;
+                RockMeterPreset = rockMeterPreset;
+                UnisonPhrases = unisonPhrases;
             }
         }
 
-        public class EngineContainer
+        public partial class EngineContainer<TNoteType, TEngineParams, TEngineStats> : EngineContainer
+            where TNoteType : Note<TNoteType>
+            where TEngineParams : BaseEngineParameters
+            where TEngineStats : BaseStats, new()
         {
-            public  int          EngineId      { get; }
-            public  BaseEngine   Engine        { get; }
-            private Instrument   Instrument    { get; }
-            private SongChart    SongChart     { get; }
-            public  List<Phrase> UnisonPhrases { get; }
+            public BaseEngine<TNoteType, TEngineParams, TEngineStats> Engine               { get; }
+            public InstrumentDifficulty<TNoteType>                    InstrumentDifficulty { get; }
 
-            public enum EngineCommandType
+            public EngineContainer(BaseEngine<TNoteType, TEngineParams, TEngineStats> engine,
+                InstrumentDifficulty<TNoteType> instrumentDifficulty, int harmonyIndex, SongChart songChart,
+                int engineId, EngineManager manager, RockMeterPreset rockMeterPreset)
+                : base(engineId, harmonyIndex, manager, rockMeterPreset,
+                    GetUnisonPhrases(instrumentDifficulty, songChart, engine is DrumsEngine))
             {
-                AwardUnisonBonus,
-            }
-
-            private struct EngineCommand
-            {
-                public EngineCommandType CommandType;
-                public double            Time;
-            }
-
-            private List<EngineCommand> _sentCommands = new();
-            private int                 _commandCount => _sentCommands.Count;
-            private EngineManager       _engineManager;
-
-            public EngineContainer(BaseEngine engine, Instrument instrument, SongChart songChart, int engineId, EngineManager manager)
-            {
-                EngineId = engineId;
                 Engine = engine;
-                Instrument = instrument;
-                SongChart = songChart;
-                UnisonPhrases = GetUnisonPhrases(Instrument, SongChart);
-                _engineManager = manager;
+                InstrumentDifficulty = instrumentDifficulty;
+
+                SubscribeToEvents();
             }
 
-            public void SendCommand(EngineCommandType command)
+            public override void SendCommand(EngineCommandType command)
             {
                 // TODO: This will require rethinking when there are more commands, but for now this should work?
                 if (command == EngineCommandType.AwardUnisonBonus)
@@ -67,42 +87,122 @@ namespace YARG.Core.Engine
                 {
                     return;
                 }
-                _sentCommands.Add(new EngineCommand { CommandType = command, Time = Engine.CurrentTime });
+
+                SentCommands.Add(new EngineCommand
+                {
+                    CommandType = command,
+                    Time = Engine.CurrentTime,
+                });
             }
 
-            public void OnStarPowerPhraseHit<TNote>(TNote note) where TNote : Note<TNote>
+            public void OnStarPowerPhraseHit(TNoteType note)
             {
-                _engineManager.OnStarPowerPhraseHit(this, note.Time);
+                EngineManager.OnStarPowerPhraseHit(this, note.Time);
             }
 
-            public void UpdateEngine(double time)
+            public override void UpdateEngine(double time)
             {
                 Engine.Update(time);
             }
+
+            public override BaseEngine BaseEngine => Engine;
+            public override Instrument Instrument => InstrumentDifficulty.Instrument;
+
+            public override Difficulty Difficulty => InstrumentDifficulty.Difficulty;
+
+            public override void SubscribeToStarPowerPhraseHit()
+            {
+                Engine.OnStarPowerPhraseHit += OnStarPowerPhraseHit;
+            }
+
+            public override void UnsubscribeFromStarPowerPhraseHit()
+            {
+                Engine.OnStarPowerPhraseHit -= OnStarPowerPhraseHit;
+            }
         }
 
-        public EngineContainer Register<TEngineType>(TEngineType engine, Instrument instrument, SongChart chart)
-            where TEngineType : BaseEngine
+        public EngineContainer Register<TNoteType, TEngineParams, TEngineStats>(
+            BaseEngine<TNoteType, TEngineParams, TEngineStats> engine,
+            InstrumentDifficulty<TNoteType> instrumentDifficulty, SongChart chart, RockMeterPreset rockMeterPreset)
+            where TNoteType : Note<TNoteType>
+            where TEngineParams : BaseEngineParameters
+            where TEngineStats : BaseStats, new() =>
+            Register(engine, instrumentDifficulty, 0, chart, rockMeterPreset);
+
+        public EngineContainer Register<TNoteType, TEngineParams, TEngineStats>(
+            BaseEngine<TNoteType, TEngineParams, TEngineStats> engine,
+            InstrumentDifficulty<TNoteType> instrumentDifficulty, int harmonyIndex, SongChart chart,
+            RockMeterPreset rockMeterPreset)
+            where TNoteType : Note<TNoteType>
+            where TEngineParams : BaseEngineParameters
+            where TEngineStats : BaseStats, new()
         {
-            var engineContainer = new EngineContainer(engine, instrument, chart, _nextEngineIndex++, this);
+            if (_chart == null)
+            {
+                _chart = chart;
+            }
+            else
+            {
+                if (_chart != chart)
+                {
+                    throw new ArgumentException("Cannot register engine with different chart");
+                }
+            }
+
+            var engineContainer = new EngineContainer<TNoteType, TEngineParams, TEngineStats>(engine,
+                instrumentDifficulty, harmonyIndex, chart, _nextEngineIndex++, this, rockMeterPreset);
+
+            // _previousHappiness = rockMeterPreset.StartingHappiness;
 
             _allEngines.Add(engineContainer);
-            _allEnginesById.Add(engineContainer.EngineId, engineContainer);
-            AddPlayerToUnisons(engineContainer);
+            AddPlayerToUnisons(engineContainer, chart);
+            engine.OnCodaStart += CodaStartHandler;
+            engine.OnCodaEnd += CodaEndHandler;
 
             return engineContainer;
         }
 
-        private EngineContainer GetEngineContainer(BaseEngine target)
+        private void UpdateStarPowerCount(int count)
         {
-            foreach (var engine in _allEngines)
+            _starpowerCount = Math.Clamp(count, 0, int.MaxValue);
+            UpdateBandMultiplier();
+
+            if (_playerFailed && count > 0)
             {
-                if (engine.Engine == target)
-                {
-                    return engine;
-                }
+                RevivePlayer();
             }
-            throw new ArgumentException("Target engine not found");
+        }
+
+        /// <summary>
+        /// Resets mutable state - stars, codas, fail meter, band combo, unison event successes.
+        /// </summary>
+        public void ResetState()
+        {
+            _activeCodaCount = 0;
+            _currentStarIndex = 0;
+            _previousHappiness = 100f;
+            _starpowerCount = 0;
+            _activeCodaCount = 0;
+            _happinessAdjustment = 0f;
+            _lastUpdateTime = 0f;
+            _playerFailed = false;
+            // These values are derived from others, so there's no reason to reset them
+            // Score = 0; derived from all players' Score + BandBonusScore
+            // Stars = 0; derived from Score
+
+            // Combo is calculated a bit differently, so we still reset it even though it's dependent on player combo
+            Combo = 0;
+            foreach (var engineContainer in _allEngines)
+            {
+                engineContainer.ResetHappiness();
+            }
+
+            foreach (var unisonEvent in _unisonEvents)
+            {
+                unisonEvent.Reset();
+            }
+
+            //_noFail = false; There should be no instance where we want to reset this
         }
 
         public void UpdateEngines(double time)
@@ -111,6 +211,60 @@ namespace YARG.Core.Engine
             {
                 engine.UpdateEngine(time);
             }
+        }
+
+        public enum EngineCommandType
+        {
+            AwardUnisonBonus,
+        }
+
+        public struct EngineCommand
+        {
+            public EngineCommandType CommandType;
+            public double            Time;
+        }
+
+        public void Unregister(EngineContainer engineContainer)
+        {
+            RemovePlayerFromUnisons(engineContainer);
+            _allEngines.Remove(engineContainer);
+            engineContainer.UnsubscribeFromEvents();
+            RecalculateBandState();
+
+            if (engineContainer.BaseEngine.CodaHasStarted)
+            {
+                _activeCodaCount--;
+            }
+        }
+
+        /// <summary>
+        /// Unregisters all engines, removes all unison events, and resets all game state.
+        /// </summary>
+        public void Reset()
+        {
+            foreach (var engine in _allEngines)
+            {
+                engine.UnsubscribeFromEvents();
+            }
+            _allEngines.Clear();
+            _unisonEvents.Clear();
+            _nextEngineIndex = 0;
+            ResetState();
+        }
+
+        private void RecalculateBandState()
+        {
+            int activeSpCount = 0;
+            for (int i = 0; i < _allEngines.Count; i++)
+            {
+                var engine = _allEngines[i];
+                if (engine.BaseEngine.BaseStats.IsStarPowerActive)
+                    activeSpCount++;
+            }
+
+            UpdateStarPowerCount(activeSpCount);
+            UpdateBandMultiplier();
+            UpdateHappiness();
         }
     }
 }
